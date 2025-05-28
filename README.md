@@ -1,7 +1,8 @@
 # Raylib Netcode
 
-A minimal rollback netcode prototype using an authoritative server model.  
-Client developed with Raylib, both client and server written in C.  
+A minimal rollback netcode implementation with an authoritative server and a client written with Raylib.  
+
+- https://github.com/raysan5/raylib/
 
 ## Core Architecture
 
