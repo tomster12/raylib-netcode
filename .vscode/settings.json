@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "*.jlox": "bat",
+        "*.lox": "ruby",
+        "stdint.h": "c",
+        "game.h": "c"
+    }
+}
