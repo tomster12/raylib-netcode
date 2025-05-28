@@ -22,4 +22,4 @@ C:   1        2        3        4        5        6        7
 S:   1                 3                 5                 7
 ```
 
-In the implemented model I am initially going to aim for `R == C == 60hz`.
+In the working code I am going to implement  `R == C == 60hz` with no interpolation.
