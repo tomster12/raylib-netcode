@@ -4,21 +4,6 @@ A minimal rollback netcode implementation with an authoritative server and a cli
 
 - https://github.com/raysan5/raylib/
 
-## Core Architecture
-
-**Authoritative Server**
-
-- Simulates game state using confirmed or predicted inputs.
-- Stores input history and state buffer for rollback.
-- Resimulates on late input arrival.
-
-**Raylib Client**
-
-- Predict their own inputs locally.
-- Simulate game logic on fixed ticks (e.g. 60Hz).
-- Render at high framerate (e.g. 240Hz) using interpolation.
-- Reconcile with server state via rollback if needed.
-
 ## Reference Timing Model
 
 The rendering frames, client ticks, and server ticks are each on different intervals.  
