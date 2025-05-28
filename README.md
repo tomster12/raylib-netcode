@@ -6,11 +6,11 @@ A minimal rollback netcode implementation with an authoritative server and a cli
 
 ## Reference Timing Model
 
-The rendering frames, client ticks, and server ticks are each on different intervals.  
+The rendering frames, client ticks, and server ticks are each on different intervals:
 
-- Simulation in the client occurs in the client ticks at the canonical frame rate.  
-- The server accumulates client ticks and catches up in a single server tick.  
-- The client interpolates the client ticks and takes in input on the render frames.  
+- Simulation in the client occurs in the client ticks at the canonical frame rate
+- The server accumulates client ticks and catches up in a single server tick
+- The client interpolates the client ticks and takes in input on the render frames
 
 ```text
 R = Render Frame (e.g. 240Hz)
