@@ -7,6 +7,7 @@
 typedef struct
 {
     volatile sig_atomic_t to_shutdown;
+    bool is_connected;
     int socket_fd;
     pthread_t recv_thread;
     uint32_t client_player_id;

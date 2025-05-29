@@ -10,6 +10,7 @@
 int game_client_init(GameClient *client, const char *server_ip, int port)
 {
     // Initialize game client state
+    client->is_connected = false;
     client->to_shutdown = 0;
     client->socket_fd = -1;
     client->recv_thread = 0;
@@ -39,6 +40,7 @@ int game_client_init(GameClient *client, const char *server_ip, int port)
     }
 
     printf("Game client connected to %s:%d (fd=%d)\n", server_ip, port, client->socket_fd);
+    client->is_connected = true;
 
     // Start the server listening thread
     if (pthread_create(&client->recv_thread, NULL, game_client_recv_thread, client) != 0)
@@ -56,6 +58,7 @@ int game_client_init(GameClient *client, const char *server_ip, int port)
 void game_client_shutdown(GameClient *client)
 {
     client->to_shutdown = 1;
+    client->is_connected = false;
 
     // Close the connection socket
     if (client->socket_fd >= 0)
@@ -92,6 +95,23 @@ void *game_client_recv_thread(void *arg)
 
     while (!client->to_shutdown)
     {
+        char buf[MAX_MESSAGE_SIZE];
+        ssize_t n = recv(client->socket_fd, buf, sizeof(buf), 0);
+        if (n == 0)
+        {
+            // Connection closed by server
+            printf("Server closed connection\n");
+            client->is_connected = false;
+            break;
+        }
+        if (n < 0)
+        {
+            // Error occurred
+            perror("recv");
+            client->is_connected = false;
+            break;
+        }
+
         // TODO
     }
 

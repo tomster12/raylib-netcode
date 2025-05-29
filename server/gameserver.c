@@ -105,6 +105,10 @@ void game_server_shutdown(GameServer *server)
                 printf("Waiting for client to finish (thread=%lu fd=%d)\n", server->client_data[i].thread_id, server->client_data[i].fd);
                 shutdown(server->client_data[i].fd, SHUT_RDWR);
                 pthread_join(server->client_data[i].thread_id, NULL);
+                close(server->client_data[i].fd);
+                server->client_data[i].fd = -1;
+                server->client_data[i].is_connected = false;
+                printf("Client finished (index=%d)\n", i);
             }
         }
     }

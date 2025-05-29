@@ -55,7 +55,7 @@ int main()
     }
 
     // Game simulation tick and rendering loop
-    while (!WindowShouldClose() && !to_shutdown)
+    while (!WindowShouldClose() && !to_shutdown && client.is_connected)
     {
         // Grab current frame and events
         GameState *game_state = game_client_get_state(&client, client.client_frame);
