@@ -6,16 +6,39 @@
 #include "raylib.h"
 #include "shared/gameimpl.h"
 #include "shared/globals.h"
-#include <arpa/inet.h>  // For inet_ntop, inet_pton
-#include <stdio.h>      // For printf
-#include <stdlib.h>     // For malloc, free
-#include <string.h>     // For memset
-#include <sys/socket.h> // For socket functions
-#include <unistd.h>     // For usleep
+#include <arpa/inet.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+volatile sig_atomic_t to_shutdown = 0;
+
+void handle_sigaction(int signum)
+{
+    if (signum == SIGINT || signum == SIGTERM)
+    {
+        printf("Received sigaction signum=%d\n", signum);
+        to_shutdown = 1;
+    }
+    else
+    {
+        perror("Unexpected signal received");
+    }
+}
 
 int main()
 {
     printf("Client application started\n");
+
+    // Setup signal handlers
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = handle_sigaction;
+    sa.sa_flags = 0;
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
 
     // Setup Raylib window
     SetTraceLogLevel(LOG_WARNING);
@@ -32,7 +55,7 @@ int main()
     }
 
     // Game simulation tick and rendering loop
-    while (!WindowShouldClose())
+    while (!WindowShouldClose() && !to_shutdown)
     {
         // Grab current frame and events
         GameState *game_state = game_client_get_state(&client, client.client_frame);
@@ -57,9 +80,10 @@ int main()
         game_client_tick(&client);
     }
 
+    // Perform cleanup
+    printf("\nShutting down the game client\n");
     game_client_shutdown(&client);
     CloseWindow();
-
     printf("Client application finished\n");
     return 0;
 }

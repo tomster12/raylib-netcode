@@ -1,12 +1,11 @@
 #include "gameclient.h"
-#include <arpa/inet.h> // For socket functions
-#include <errno.h>     // For errno
-#include <pthread.h>   // For threading
-#include <stdio.h>     // For perror
-#include <stdio.h>     // For printf
-#include <stdlib.h>    // For exit
-#include <string.h>    // For memset
-#include <unistd.h>    // For close
+#include <arpa/inet.h>
+#include <errno.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
 int game_client_init(GameClient *client, const char *server_ip, int port)
 {
@@ -39,6 +38,8 @@ int game_client_init(GameClient *client, const char *server_ip, int port)
         return 1;
     }
 
+    printf("Game client connected to %s:%d (fd=%d)\n", server_ip, port, client->socket_fd);
+
     // Start the server listening thread
     if (pthread_create(&client->recv_thread, NULL, game_client_recv_thread, client) != 0)
     {
@@ -47,7 +48,8 @@ int game_client_init(GameClient *client, const char *server_ip, int port)
         return 1;
     }
 
-    printf("Game client initialized and connected to %s:%d\n", server_ip, port);
+    printf("Receive thread started (thread=%lu)\n", client->recv_thread);
+
     return 0;
 }
 
@@ -55,17 +57,20 @@ void game_client_shutdown(GameClient *client)
 {
     client->to_shutdown = 1;
 
-    // Wait for the listening thread to finish
-    if (client->recv_thread)
-    {
-        pthread_join(client->recv_thread, NULL);
-    }
-
     // Close the connection socket
     if (client->socket_fd >= 0)
     {
+        printf("Closing client socket (fd=%d)\n", client->socket_fd);
+        shutdown(client->socket_fd, SHUT_RDWR);
         close(client->socket_fd);
         client->socket_fd = -1;
+    }
+
+    // Wait for the listening thread to finish
+    if (client->recv_thread)
+    {
+        printf("Waiting for receive thread to finish (thread=%lu)\n", client->recv_thread);
+        pthread_join(client->recv_thread, NULL);
     }
 
     printf("Game client shutdown\n");
@@ -85,9 +90,9 @@ void *game_client_recv_thread(void *arg)
 {
     GameClient *client = (GameClient *)arg;
 
-    // Receive loop for the client
     while (!client->to_shutdown)
     {
+        // TODO
     }
 
     printf("Client receive thread shutdown\n");
@@ -96,8 +101,7 @@ void *game_client_recv_thread(void *arg)
 
 void game_client_tick(GameClient *client)
 {
-    // send(client->socket_fd, &client->client_frame, sizeof(uint32_t), 0);
-    // send(client->socket_fd, events, sizeof(GameEvents), 0);
+    // TODO
 
     client->client_frame++;
     client->server_frame++;

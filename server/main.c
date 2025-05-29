@@ -50,11 +50,8 @@ int main()
 
     // Wait for shutdown signal
     while (!to_shutdown) pause();
-
-    // Shutdown the game server
-    printf("Shutting down the game server\n");
+    printf("\nShutting down the game server\n");
     game_server_shutdown(&server);
-
     printf("Server application finished\n");
     return 0;
 }
