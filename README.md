@@ -1,6 +1,6 @@
 # Raylib Netcode
 
-A minimal rollback netcode implementation with an authoritative server and a client written with Raylib.  
+A minimal rollback netcode implementation with an authoritative server and a client written with Raylib.
 
 - https://github.com/raysan5/raylib/
 
@@ -22,4 +22,4 @@ C:   1        2        3        4        5        6        7
 S:   1                 3                 5                 7
 ```
 
-In the working code I am going to implement  `R == C == 60hz` with no interpolation.
+In the working code I am going to implement `R == C == 60hz` with no interpolation.

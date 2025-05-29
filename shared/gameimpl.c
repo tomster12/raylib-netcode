@@ -1,4 +1,4 @@
-#include "implcore.h"
+#include "gameimpl.h"
 
 void game_simulate(const GameState *current, const GameEvents *events, GameState *out)
 {
@@ -10,7 +10,7 @@ void game_simulate(const GameState *current, const GameEvents *events, GameState
         switch (event->type)
         {
         case PLAYER_EVENT_PLAYER_JOINED:
-            if (event->player_id < MAX_PLAYERS)
+            if (event->player_id < MAX_CLIENTS)
             {
                 out->player_data[event->player_id].active = true;
                 out->player_data[event->player_id].x = 400;
@@ -18,7 +18,7 @@ void game_simulate(const GameState *current, const GameEvents *events, GameState
             }
             break;
         case PLAYER_EVENT_PLAYER_LEFT:
-            if (event->player_id < MAX_PLAYERS)
+            if (event->player_id < MAX_CLIENTS)
             {
                 out->player_data[event->player_id].active = false;
             }
@@ -26,7 +26,8 @@ void game_simulate(const GameState *current, const GameEvents *events, GameState
         }
     }
 
-    for (size_t i = 0; i < MAX_PLAYERS; ++i)
+    uint32_t active_players = 0;
+    for (size_t i = 0; i < MAX_CLIENTS; ++i)
     {
         if (!out->player_data[i].active)
         {

@@ -1,11 +1,9 @@
 #pragma once
 
+#include "shared/globals.h"
+#include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
-#include <stdbool.h>
-
-#define MAX_ROLLBACK 256
-#define MAX_PLAYERS 50
 
 typedef struct
 {
@@ -26,8 +24,8 @@ typedef struct
 
 typedef struct
 {
-    PlayerControl player_controls[MAX_PLAYERS];
-    PlayerEvent player_event[MAX_PLAYERS];
+    PlayerControl player_controls[MAX_CLIENTS];
+    PlayerEvent player_event[MAX_CLIENTS];
     size_t player_event_count;
 } GameEvents;
 
@@ -39,7 +37,7 @@ typedef struct
 
 typedef struct
 {
-    PlayerData player_data[MAX_PLAYERS];
+    PlayerData player_data[MAX_CLIENTS];
 } GameState;
 
 void game_simulate(const GameState *current, const GameEvents *input, GameState *out);

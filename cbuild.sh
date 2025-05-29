@@ -26,7 +26,7 @@ print_help() {
 # ----------------------------------------------------------------------------
 
 # Parse arguments with defaults
-output="build"
+output=""
 compiler="gcc"
 run=false
 silent=false
@@ -65,8 +65,17 @@ target_path=$(realpath "$target")
 target_dir=$(dirname "$target_path")
 target_name=$(basename "$target_path")
 target_base="${target_name%.*}"
-output_dir=$(realpath "$output")
-output_exe="$output_dir/$target_base"
+
+if [[ -n "$output" ]]; then
+    # If output is specified, use it as the full path for the executable
+    output_exe=$(realpath "$output")
+    output_dir=$(dirname "$output_exe")
+else
+    # Default: build/target_base
+    output_dir=$(realpath "build")
+    output_exe="$output_dir/$target_base"
+fi
+
 
 # Extract build flags from lines in the target file
 compiler_flags=""

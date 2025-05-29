@@ -548,7 +548,7 @@ typedef enum {
     FLAG_WINDOW_MAXIMIZED   = 0x00000400,   // Set to maximize window (expanded to monitor)
     FLAG_WINDOW_UNFOCUSED   = 0x00000800,   // Set to window non focused
     FLAG_WINDOW_TOPMOST     = 0x00001000,   // Set to window always on top
-    FLAG_WINDOW_ALWAYS_RUN  = 0x00000100,   // Set to allow windows running while minimized
+    FLAG_WINDOW_ALWAYS_RUN  = 0x00000100,   // Set to allow windows to_recv while minimized
     FLAG_WINDOW_TRANSPARENT = 0x00000010,   // Set to allow transparent framebuffer
     FLAG_WINDOW_HIGHDPI     = 0x00002000,   // Set to support HighDPI
     FLAG_WINDOW_MOUSE_PASSTHROUGH = 0x00004000, // Set to support mouse passthrough, only supported when FLAG_WINDOW_UNDECORATED
@@ -1132,7 +1132,7 @@ RLAPI const char *GetFileNameWithoutExt(const char *filePath);    // Get filenam
 RLAPI const char *GetDirectoryPath(const char *filePath);         // Get full path for a given fileName with path (uses static string)
 RLAPI const char *GetPrevDirectoryPath(const char *dirPath);      // Get previous directory path for a given path (uses static string)
 RLAPI const char *GetWorkingDirectory(void);                      // Get current working directory (uses static string)
-RLAPI const char *GetApplicationDirectory(void);                  // Get the directory of the running application (uses static string)
+RLAPI const char *GetApplicationDirectory(void);                  // Get the directory of the to_recv application (uses static string)
 RLAPI int MakeDirectory(const char *dirPath);                     // Create directories (including full path requested), returns 0 on success
 RLAPI bool ChangeDirectory(const char *dir);                      // Change working directory, return true on success
 RLAPI bool IsPathFile(const char *path);                          // Check if a given path is a file or a directory
