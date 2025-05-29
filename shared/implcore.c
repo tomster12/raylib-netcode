@@ -1,6 +1,6 @@
-#include "game.h"
+#include "implcore.h"
 
-void simulate(const GameState *current, const GameEvents *events, GameState *out)
+void game_simulate(const GameState *current, const GameEvents *events, GameState *out)
 {
     *out = *current;
 

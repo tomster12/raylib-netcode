@@ -1,1 +1,1 @@
-./cbuild.sh client/main.c -run -output ../build -silent -clear
+./cbuild.sh client/main.c -run -output ../build -silent | tee client.log

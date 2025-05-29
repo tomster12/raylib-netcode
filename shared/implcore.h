@@ -4,21 +4,21 @@
 #include <string.h>
 #include <stdbool.h>
 
-#define MAX_FRAMES 256
-#define MAX_PLAYERS 4
+#define MAX_ROLLBACK 256
+#define MAX_PLAYERS 50
 
 typedef struct
 {
     bool movements_held[4];
 } PlayerControl;
 
-typedef enum 
+typedef enum
 {
     PLAYER_EVENT_PLAYER_JOINED,
     PLAYER_EVENT_PLAYER_LEFT
 } PlayerEventType;
 
-typedef struct 
+typedef struct
 {
     PlayerEventType type;
     size_t player_id;
@@ -42,4 +42,4 @@ typedef struct
     PlayerData player_data[MAX_PLAYERS];
 } GameState;
 
-void simulate(const GameState *current, const GameEvents *input, GameState *out);
+void game_simulate(const GameState *current, const GameEvents *input, GameState *out);

@@ -1,79 +1,76 @@
 // cbuild: -I../libs/raylib/include -L../libs/raylib/lib -I../shared
-// cbuild: -lraylib -lm ../shared/game.c
+// cbuild: -lraylib -lm ../shared/implcore.c implclient.c netclient.c
+
+#include <stdio.h>      // For printf
+#include <stdlib.h>     // For malloc, free
+#include <string.h>     // For memset
+#include <unistd.h>     // For usleep
+#include <arpa/inet.h>  // For inet_ntop, inet_pton
+#include <sys/socket.h> // For socket functions
 
 #include "raylib.h"
-#include "gamebuffer.h"
-#include "game.h"
+#include "implcore.h"
+#include "implclient.h"
+#include "netclient.h"
 
-void populate_game_events(GameState *game_state, GameEvents *game_events, int local_player_id)
-{
-    // Join as a new player if this is the first frame
-    if (game_state->player_data[local_player_id].active == false)
-    {
-        PlayerEvent *join_event = &game_events->player_event[game_events->player_event_count++];
-        join_event->type = PLAYER_EVENT_PLAYER_JOINED;
-        join_event->player_id = local_player_id;
-        return;
-    }
-
-    // Otherwise handle moving the player
-    PlayerControl *controls = &game_events->player_controls[local_player_id];
-    controls->movements_held[0] = IsKeyDown(KEY_A);
-    controls->movements_held[1] = IsKeyDown(KEY_D);
-    controls->movements_held[3] = IsKeyDown(KEY_S);
-    controls->movements_held[2] = IsKeyDown(KEY_W);
-}
-
-void render_game_state(const GameState *game_state, int local_player_id)
-{
-    // Render each player as a coloured circle
-    for (size_t i = 0; i < MAX_PLAYERS; ++i)
-    {
-        const PlayerData *player = &game_state->player_data[i];
-        if (player->active)
-        {
-            DrawCircle((int)player->x, (int)player->y, 20, (i == local_player_id) ? BLUE : RED);
-        }
-    }
-}
+#define PORT 32000
 
 int main()
 {
-    // Setup Raylib
+    setbuf(stdout, NULL);
+    printf("Starting client...\n");
+
+    // Setup Raylib window
     SetTraceLogLevel(LOG_WARNING);
-    SetTargetFPS(60);
+    SetTargetFPS(10);
     InitWindow(800, 800, "Raylib Netcode");
 
-    // Setup game
-    uint32_t current_frame = 0;
+    // Setup game state and buffer
     int local_player_id = 0;
-    GameBuffer game_buffer;
-    game_buffer_init(&game_buffer, current_frame);
+    NetBuffer net_buf;
+    net_buffer_init(&net_buf);
 
+    // Setup game client
+    if (net_client_init("127.0.0.1", PORT, &net_buf) != 0)
+    {
+        fprintf(stderr, "Failed to connect to server\n");
+        CloseWindow();
+        return 1;
+    }
+
+    // Game simulation tick and rendering loop
     while (!WindowShouldClose())
     {
-        GameState *game_state = game_buffer_get_state(&game_buffer, current_frame);
-        GameEvents *game_events = game_buffer_get_events(&game_buffer, current_frame);
+        printf("Client frame: %u, Server frame: %u\n", net_buf.client_frame, net_buf.server_frame);
+
+        // Grab current frame and events
+        GameState *game_state = net_buffer_get_state(&net_buf, net_buf.client_frame);
+        GameEvents *game_events = net_buffer_get_events(&net_buf, net_buf.client_frame);
         memset(game_events, 0, sizeof(GameEvents));
 
-        // Events
-        populate_game_events(game_state, game_events, local_player_id);
+        // Handle game events
+        game_handle_events(game_state, game_events, local_player_id);
 
-        // Simulate
-        GameState *game_state_next = game_buffer_get_state(&game_buffer, current_frame + 1);
-        simulate(game_state, game_events, game_state_next);
+        // Perform game simulation
+        GameState *game_state_next = net_buffer_get_state(&net_buf, net_buf.client_frame + 1);
+        game_simulate(game_state, game_events, game_state_next);
 
-        // Draw
+        // Draw the game state
         BeginDrawing();
         ClearBackground(RAYWHITE);
-        render_game_state(game_state_next, local_player_id);
+        game_render(game_state_next, local_player_id);
         DrawFPS(10, 10);
         EndDrawing();
 
-        current_frame++;
+        net_buf.client_frame++;
+        net_buf.server_frame++; // TODO: Remove this line when server updates are handled properly
+
+        // Send this frames events to the server
+        net_client_send_events(net_buf.client_frame - 1, game_events);
     }
 
+    printf("Shutting down client...\n");
+    net_client_shutdown();
     CloseWindow();
-
     return 0;
 }
