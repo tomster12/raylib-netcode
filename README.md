@@ -1,30 +1,16 @@
 # Raylib Netcode
 
-A minimal rollback netcode prototype using an authoritative server model.  
-Client developed with Raylib, both client and server written in C.  
+A minimal rollback netcode implementation with an authoritative server and a client written with Raylib.  
 
-## Core Architecture
-
-**Authoritative Server**
-
-- Simulates game state using confirmed or predicted inputs.
-- Stores input history and state buffer for rollback.
-- Resimulates on late input arrival.
-
-**Raylib Client**
-
-- Predict their own inputs locally.
-- Simulate game logic on fixed ticks (e.g. 60Hz).
-- Render at high framerate (e.g. 240Hz) using interpolation.
-- Reconcile with server state via rollback if needed.
+- https://github.com/raysan5/raylib/
 
 ## Reference Timing Model
 
-The rendering frames, client ticks, and server ticks are each on different intervals.  
+The rendering frames, client ticks, and server ticks are each on different intervals:
 
-- Simulation in the client occurs in the client ticks at the canonical frame rate.  
-- The server accumulates client ticks and catches up in a single server tick.  
-- The client interpolates the client ticks and takes in input on the render frames.  
+- Simulation in the client occurs in the client ticks at the canonical frame rate
+- The server accumulates client ticks and catches up in a single server tick
+- The client interpolates the client ticks and takes in input on the render frames
 
 ```text
 R = Render Frame (e.g. 240Hz)
@@ -36,4 +22,4 @@ C:   1        2        3        4        5        6        7
 S:   1                 3                 5                 7
 ```
 
-In the implemented model, I am initially going to aim for R == C == 60hz due to no need for anything more than this.  
+In the working code I am going to implement  `R == C == 60hz` with no interpolation.
