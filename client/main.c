@@ -62,15 +62,15 @@ int main()
     while (!WindowShouldClose() && !to_shutdown_app && client.is_connected)
     {
         // Grab current frame and events
-        GameState *game_state = game_client_get_state(&client, client.client_frame);
-        GameEvents *game_events = game_client_get_events(&client, client.client_frame);
+        GameState *game_state = game_client_get_state(&client, client.current_frame);
+        GameEvents *game_events = game_client_get_events(&client, client.current_frame);
         memset(game_events, 0, sizeof(GameEvents));
 
         // Handle game events
         game_handle_events(game_state, game_events, client.client_player_id);
 
         // Perform game simulation
-        GameState *game_state_next = game_client_get_state(&client, client.client_frame + 1);
+        GameState *game_state_next = game_client_get_state(&client, client.current_frame + 1);
         game_simulate(game_state, game_events, game_state_next);
 
         // Send this frames events to the server

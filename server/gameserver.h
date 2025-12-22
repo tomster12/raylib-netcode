@@ -10,6 +10,8 @@ typedef struct
     int fd;
     int index;
     pthread_t thread_id;
+    uint32_t last_received_frame;
+    bool ready_for_frame;
 } ClientData;
 
 typedef struct
@@ -21,10 +23,12 @@ typedef struct
     pthread_mutex_t client_sockets_mutex;
     ClientData client_data[MAX_CLIENTS];
     int client_count;
-    uint32_t server_frame;
+
     pthread_mutex_t game_state_mutex;
+    pthread_cond_t frame_ready_cond;
     GameState game_states[MAX_ROLLBACK];
     GameEvents game_events[MAX_ROLLBACK];
+    uint32_t server_frame;
 } GameServer;
 
 typedef struct
@@ -44,3 +48,7 @@ void *game_server_accept_thread(void *arg);
 void *game_server_client_thread(void *arg);
 
 void *game_simulation_thread(void *arg);
+
+bool all_clients_ready_for_frame(GameServer *server);
+
+void reset_client_ready_flags(GameServer *server);

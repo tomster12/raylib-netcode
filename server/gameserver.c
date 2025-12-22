@@ -298,11 +298,21 @@ void *game_server_client_thread(void *arg)
                input.movements_held[0], input.movements_held[1],
                input.movements_held[2], input.movements_held[3]);
 
-        // Store the input for this frame
         pthread_mutex_lock(&server->game_state_mutex);
         {
+            // Store the input
             GameEvents *events = &server->game_events[frame % MAX_ROLLBACK];
             events->player_inputs[player_id] = input;
+
+            // Mark this client as ready
+            client_data->ready_for_frame = true;
+            client_data->last_received_frame = frame;
+
+            // Signal simulation thread if all clients are now ready
+            if (all_clients_ready_for_frame(server))
+            {
+                pthread_cond_signal(&server->frame_ready_cond);
+            }
         }
         pthread_mutex_unlock(&server->game_state_mutex);
     }
@@ -347,27 +357,31 @@ void *game_simulation_thread(void *arg)
 {
     GameServer *server = (GameServer *)arg;
 
-    // Wait for at least one client to connect before starting simulation
-    printf("Simulation thread waiting for clients to connect...\n");
+    // Wait for at least one client
+    printf("Simulation thread waiting for clients...\n");
     while (!server->to_shutdown && server->client_count == 0)
     {
-        usleep(100000); // Sleep 100ms
+        usleep(100000);
     }
 
-    if (server->to_shutdown)
-    {
-        printf("Simulation thread shutting down before any clients connected\n");
-        return NULL;
-    }
-
-    printf("Simulation thread starting (client_count=%d)\n", server->client_count);
+    printf("Simulation thread starting\n");
 
     while (!server->to_shutdown)
     {
-        usleep(1000000 / SIMULATION_TICK_RATE);
-
         pthread_mutex_lock(&server->game_state_mutex);
         {
+            // Wait until all connected clients have sent input for current frame
+            while (!server->to_shutdown && !all_clients_ready_for_frame(server))
+            {
+                pthread_cond_wait(&server->frame_ready_cond, &server->game_state_mutex);
+            }
+
+            if (server->to_shutdown)
+            {
+                pthread_mutex_unlock(&server->game_state_mutex);
+                break;
+            }
+
             uint32_t current_frame = server->server_frame;
             uint32_t next_frame = current_frame + 1;
 
@@ -378,21 +392,44 @@ void *game_simulation_thread(void *arg)
             // Simulate the game
             game_simulate(current_state, current_events, next_state);
 
-            // Clear events for next frame
-            memset(&server->game_events[next_frame % MAX_ROLLBACK], 0, sizeof(GameEvents));
-
-            server->server_frame = next_frame;
-
             printf("Server simulated frame %u -> %u\n", current_frame, next_frame);
 
-            // TODO: Broadcast frame events to all clients
-            // uint8_t buffer[MAX_MESSAGE_SIZE];
-            // size_t msg_size = serialize_frame_events(buffer, current_frame, current_events);
-            // broadcast_to_all_clients(server, buffer, msg_size, -1);
+            // Broadcast the inputs for this frame to all clients
+            uint8_t buffer[MAX_MESSAGE_SIZE];
+            size_t msg_size = serialize_frame_events(buffer, current_frame, current_events);
+            broadcast_to_all_clients(server, buffer, msg_size, -1);
+
+            // Move to next frame
+            server->server_frame = next_frame;
+            memset(&server->game_events[next_frame % MAX_ROLLBACK], 0, sizeof(GameEvents));
+            reset_client_ready_flags(server);
         }
         pthread_mutex_unlock(&server->game_state_mutex);
+
+        // Don't spin too fast
+        usleep(1000);
     }
 
     printf("Simulation thread shutting down\n");
     return NULL;
+}
+
+bool all_clients_ready_for_frame(GameServer *server)
+{
+    for (int i = 0; i < MAX_CLIENTS; i++)
+    {
+        if (server->client_data[i].is_connected && !server->client_data[i].ready_for_frame)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+void reset_client_ready_flags(GameServer *server)
+{
+    for (int i = 0; i < MAX_CLIENTS; i++)
+    {
+        server->client_data[i].ready_for_frame = false;
+    }
 }

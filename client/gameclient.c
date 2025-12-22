@@ -16,10 +16,12 @@ int game_client_init(GameClient *client, const char *server_ip, int port)
     client->socket_fd = -1;
     client->recv_thread = 0;
     client->client_player_id = 0;
-    client->server_frame = 0;
-    client->client_frame = 0;
+
+    client->last_confirmed_frame = 0;
+    client->current_frame = 0;
     memset(client->states, 0, sizeof(client->states));
     memset(client->events, 0, sizeof(client->events));
+    memset(client->frame_confirmed, 0, sizeof(client->frame_confirmed));
 
     // Connect to the server
     client->socket_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -127,6 +129,12 @@ void *game_client_recv_thread(void *arg)
             GameState *initial_state = game_client_get_state(client, 0);
             memset(initial_state, 0, sizeof(GameState));
             game_player_join(initial_state, assigned_id);
+
+            client->last_confirmed_frame = 0;
+            client->current_frame = 0;
+            client->frame_confirmed[0] = true;
+
+            printf("Client initialized at frame 0\n");
             break;
         }
 
@@ -137,7 +145,7 @@ void *game_client_recv_thread(void *arg)
             printf("Player %u joined\n", joined_player_id);
 
             // Add this player to the current state
-            GameState *current_state = game_client_get_state(client, client->client_frame);
+            GameState *current_state = game_client_get_state(client, client->current_frame);
             game_player_join(current_state, joined_player_id);
             break;
         }
@@ -149,16 +157,29 @@ void *game_client_recv_thread(void *arg)
             printf("Player %u left\n", left_player_id);
 
             // Remove this player from the current state
-            GameState *current_state = game_client_get_state(client, client->client_frame);
+            GameState *current_state = game_client_get_state(client, client->current_frame);
             game_player_leave(current_state, left_player_id);
             break;
         }
 
         case MSG_S2P_FRAME_EVENTS:
         {
-            // TODO: Handle authoritative frame inputs from server
-            // This is where rollback will happen
-            printf("Received frame events from server\n");
+            uint32_t server_frame;
+            GameEvents server_events;
+            deserialize_frame_events((uint8_t *)buf, n, &server_frame, &server_events);
+            printf("Received authoritative frame %u from server\n", server_frame);
+
+            // Store the authoritative inputs
+            GameEvents *local_events = game_client_get_events(client, server_frame);
+            *local_events = server_events;
+            client->frame_confirmed[server_frame % MAX_ROLLBACK] = true;
+
+            // TODO: Check if prediction was wrong, rollback if needed
+            // For now, just update last confirmed
+            if (server_frame > client->last_confirmed_frame)
+            {
+                client->last_confirmed_frame = server_frame;
+            }
             break;
         }
 
@@ -181,14 +202,14 @@ void game_client_update_server(GameClient *client)
     }
 
     // Get the events for this frame
-    GameEvents *events = game_client_get_events(client, client->client_frame);
+    GameEvents *events = game_client_get_events(client, client->current_frame);
     PlayerInput *input = &events->player_inputs[client->client_player_id];
 
     // Serialize and send to server
     uint8_t buffer[MAX_MESSAGE_SIZE];
     size_t msg_size = serialize_player_events(
         buffer,
-        client->client_frame,
+        client->current_frame,
         client->client_player_id,
         input);
 
@@ -200,7 +221,7 @@ void game_client_update_server(GameClient *client)
         return;
     }
 
-    client->client_frame++;
+    client->current_frame++;
 
-    printf("Client tick: %u (sent %zd bytes)\n", client->client_frame, sent);
+    printf("Client tick: %u (sent %zd bytes)\n", client->current_frame, sent);
 }

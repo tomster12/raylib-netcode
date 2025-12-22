@@ -11,10 +11,12 @@ typedef struct
     int socket_fd;
     pthread_t recv_thread;
     uint32_t client_player_id;
-    uint32_t server_frame;
-    uint32_t client_frame;
+
+    uint32_t last_confirmed_frame;
+    uint32_t current_frame;
     GameState states[MAX_ROLLBACK];
     GameEvents events[MAX_ROLLBACK];
+    bool frame_confirmed[MAX_ROLLBACK];
 } GameClient;
 
 int game_client_init(GameClient *client, const char *server_ip, int port);
