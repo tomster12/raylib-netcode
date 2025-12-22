@@ -1,4 +1,5 @@
 #include "gameclient.h"
+#include "shared/protocol.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <pthread.h>
@@ -99,32 +100,107 @@ void *game_client_recv_thread(void *arg)
         ssize_t n = recv(client->socket_fd, buf, sizeof(buf), 0);
         if (n == 0)
         {
-            // Connection closed by server
             printf("Server closed connection\n");
             client->is_connected = false;
             break;
         }
         if (n < 0)
         {
-            // Error occurred
             perror("recv");
             client->is_connected = false;
             break;
         }
 
-        // TODO
+        // Read in the message header
+        MessageHeader header;
+        memcpy(&header, buf, sizeof(header));
+        switch (header.type)
+        {
+        case MSG_S2P_ASSIGN_ID:
+        {
+            uint32_t assigned_id;
+            deserialize_assign_id((uint8_t *)buf, n, &assigned_id);
+            client->client_player_id = assigned_id;
+            printf("Assigned player ID: %u\n", assigned_id);
+
+            // Initialize frame 0 with this player spawned in
+            GameState *initial_state = game_client_get_state(client, 0);
+            memset(initial_state, 0, sizeof(GameState));
+            game_player_join(initial_state, assigned_id);
+            break;
+        }
+
+        case MSG_SB_PLAYER_JOINED:
+        {
+            uint32_t joined_player_id;
+            deserialize_player_joined_left((uint8_t *)buf, n, MSG_SB_PLAYER_JOINED, &joined_player_id);
+            printf("Player %u joined\n", joined_player_id);
+
+            // Add this player to the current state
+            GameState *current_state = game_client_get_state(client, client->client_frame);
+            game_player_join(current_state, joined_player_id);
+            break;
+        }
+
+        case MSG_SB_PLAYER_LEFT:
+        {
+            uint32_t left_player_id;
+            deserialize_player_joined_left((uint8_t *)buf, n, MSG_SB_PLAYER_LEFT, &left_player_id);
+            printf("Player %u left\n", left_player_id);
+
+            // Remove this player from the current state
+            GameState *current_state = game_client_get_state(client, client->client_frame);
+            game_player_leave(current_state, left_player_id);
+            break;
+        }
+
+        case MSG_S2P_FRAME_EVENTS:
+        {
+            // TODO: Handle authoritative frame inputs from server
+            // This is where rollback will happen
+            printf("Received frame events from server\n");
+            break;
+        }
+
+        default:
+            printf("Unknown message type: %d\n", header.type);
+            break;
+        }
     }
 
     printf("Client receive thread shutdown\n");
     return NULL;
 }
 
-void game_client_tick(GameClient *client)
+void game_client_update_server(GameClient *client)
 {
-    // TODO
+    // Don't send anything until we have a player ID
+    if (client->client_player_id == -1)
+    {
+        return;
+    }
+
+    // Get the events for this frame
+    GameEvents *events = game_client_get_events(client, client->client_frame);
+    PlayerInput *input = &events->player_inputs[client->client_player_id];
+
+    // Serialize and send to server
+    uint8_t buffer[MAX_MESSAGE_SIZE];
+    size_t msg_size = serialize_player_events(
+        buffer,
+        client->client_frame,
+        client->client_player_id,
+        input);
+
+    ssize_t sent = send(client->socket_fd, buffer, msg_size, 0);
+    if (sent < 0)
+    {
+        perror("Failed to send player input");
+        client->is_connected = false;
+        return;
+    }
 
     client->client_frame++;
-    client->server_frame++;
 
-    printf("Client tick: %u, Server frame: %u\n", client->client_frame, client->server_frame);
+    printf("Client tick: %u (sent %zd bytes)\n", client->client_frame, sent);
 }

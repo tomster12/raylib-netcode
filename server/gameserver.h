@@ -1,8 +1,8 @@
 #pragma once
 
 #include "shared/gameimpl.h"
-#include <pthread.h> // for threading
-#include <signal.h>  // for signal handling
+#include <pthread.h>
+#include <signal.h>
 
 typedef struct
 {
@@ -22,6 +22,9 @@ typedef struct
     ClientData client_data[MAX_CLIENTS];
     int client_count;
     uint32_t server_frame;
+    pthread_mutex_t game_state_mutex;
+    GameState game_states[MAX_ROLLBACK];
+    GameEvents game_events[MAX_ROLLBACK];
 } GameServer;
 
 typedef struct
@@ -33,6 +36,8 @@ typedef struct
 int game_server_init(GameServer *server, int port);
 
 void game_server_shutdown(GameServer *server);
+
+void broadcast_to_all_clients(GameServer *server, const uint8_t *buffer, size_t size, int exclude_fd);
 
 void *game_server_accept_thread(void *arg);
 

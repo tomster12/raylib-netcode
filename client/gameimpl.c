@@ -4,17 +4,8 @@
 
 void game_handle_events(GameState *game_state, GameEvents *game_events, int client_player_id)
 {
-    // Join as a new player if this is the first frame
-    if (game_state->player_data[client_player_id].active == false)
-    {
-        PlayerEvent *join_event = &game_events->player_event[game_events->player_event_count++];
-        join_event->type = PLAYER_EVENT_PLAYER_JOINED;
-        join_event->player_id = client_player_id;
-        return;
-    }
-
     // Otherwise handle moving the player
-    PlayerControl *controls = &game_events->player_controls[client_player_id];
+    PlayerInput *controls = &game_events->player_inputs[client_player_id];
     controls->movements_held[0] = IsKeyDown(KEY_A);
     controls->movements_held[1] = IsKeyDown(KEY_D);
     controls->movements_held[3] = IsKeyDown(KEY_S);

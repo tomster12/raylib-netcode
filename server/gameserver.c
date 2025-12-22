@@ -1,5 +1,7 @@
 #include "gameserver.h"
+#include "shared/gameimpl.h"
 #include "shared/globals.h"
+#include "shared/protocol.h"
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <pthread.h>
@@ -11,42 +13,41 @@
 
 int game_server_init(GameServer *server, int port)
 {
-    // Initialize game client state
+    // Initialize game server state
     server->to_shutdown = false;
     server->socket_fd = -1;
     server->simulation_thread = 0;
     server->client_accept_thread = 0;
     server->client_sockets_mutex = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+    server->game_state_mutex = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     memset(server->client_data, 0, sizeof(server->client_data));
     server->client_count = 0;
     server->server_frame = 0;
 
-    // Start a detached thread for simulation
-    if (pthread_create(&server->simulation_thread, NULL, game_simulation_thread, server) != 0)
-    {
-        perror("Failed to create simulation thread");
-        return 1;
-    }
+    // Initialize game state
+    memset(server->game_states, 0, sizeof(server->game_states));
+    memset(server->game_events, 0, sizeof(server->game_events));
 
-    printf("Simulation thread started (thread=%lu)\n", server->simulation_thread);
-
-    // Bind server socket to localhost:PORT
+    // Create listening socket and bind to localhost:PORT
     server->socket_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server->socket_fd < 0)
     {
         perror("Failed to create server socket");
         return 1;
     }
+
     struct sockaddr_in addr = {0};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port = htons(port);
+
     if (bind(server->socket_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
     {
         perror("Failed to bind server socket");
         close(server->socket_fd);
         return 1;
     }
+
     if (listen(server->socket_fd, SERVER_LISTEN_BACKLOG) < 0)
     {
         perror("Failed to listen on server socket");
@@ -56,8 +57,10 @@ int game_server_init(GameServer *server, int port)
 
     printf("Server listening on ANY:%d (fd=%d)\n", port, server->socket_fd);
 
-    // Begin accepting client connections
+    // Create thread for handling and accepting clients
     pthread_mutex_init(&server->client_sockets_mutex, NULL);
+    pthread_mutex_init(&server->game_state_mutex, NULL);
+
     if (pthread_create(&server->client_accept_thread, NULL, game_server_accept_thread, server) != 0)
     {
         perror("Failed to create client accept thread");
@@ -66,6 +69,15 @@ int game_server_init(GameServer *server, int port)
     }
 
     printf("Client accept thread started (thread=%lu)\n", server->client_accept_thread);
+
+    // Start thread for game simulation (after accept thread so we can wait for clients)
+    if (pthread_create(&server->simulation_thread, NULL, game_simulation_thread, server) != 0)
+    {
+        perror("Failed to create simulation thread");
+        return 1;
+    }
+
+    printf("Simulation thread started (thread=%lu)\n", server->simulation_thread);
 
     return 0;
 }
@@ -89,6 +101,7 @@ void game_server_shutdown(GameServer *server)
         printf("Waiting for simulation loop to finish (thread=%lu)\n", server->simulation_thread);
         pthread_join(server->simulation_thread, NULL);
     }
+
     if (server->client_accept_thread)
     {
         printf("Waiting for client accept loop to finish (thread=%lu)\n", server->client_accept_thread);
@@ -112,10 +125,31 @@ void game_server_shutdown(GameServer *server)
             }
         }
     }
+
     pthread_mutex_destroy(&server->client_sockets_mutex);
+    pthread_mutex_destroy(&server->game_state_mutex);
     server->client_count = 0;
 
     printf("Game server shutdown\n");
+}
+
+void broadcast_to_all_clients(GameServer *server, const uint8_t *buffer, size_t size, int exclude_fd)
+{
+    pthread_mutex_lock(&server->client_sockets_mutex);
+    {
+        for (int i = 0; i < MAX_CLIENTS; ++i)
+        {
+            if (server->client_data[i].is_connected && server->client_data[i].fd != exclude_fd)
+            {
+                ssize_t sent = send(server->client_data[i].fd, buffer, size, 0);
+                if (sent < 0)
+                {
+                    perror("Failed to broadcast to client");
+                }
+            }
+        }
+    }
+    pthread_mutex_unlock(&server->client_sockets_mutex);
 }
 
 void *game_server_accept_thread(void *arg)
@@ -127,67 +161,83 @@ void *game_server_accept_thread(void *arg)
         // Accept a new client connection
         struct sockaddr_in client_addr;
         socklen_t client_len = sizeof(client_addr);
-        int client_fd = accept(server->socket_fd, NULL, NULL);
+        int client_fd = accept(server->socket_fd, (struct sockaddr *)&client_addr, &client_len);
         if (client_fd < 0)
         {
+            if (server->to_shutdown) break;
             perror("Failed to accept client connection");
             continue;
         }
 
+        printf("New connection from %s:%d (fd=%d)\n",
+               inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port), client_fd);
+
         // Do not allow more than MAX_CLIENTS clients
         if (server->client_count >= MAX_CLIENTS)
         {
-            printf("Maximum client limit reached (%d), rejecting new client (fd=%d)\n", MAX_CLIENTS, client_fd);
+            printf("Maximum client limit reached (%d), rejecting connection (fd=%d)\n", MAX_CLIENTS, client_fd);
             close(client_fd);
             continue;
         }
 
-        // Find the first available slot for a new client
-        int client_index = -1;
+        // Find first available slot
+        ClientData *client_data = NULL;
+        int slot_index = -1;
+
         pthread_mutex_lock(&server->client_sockets_mutex);
-        for (int i = 0; i < MAX_CLIENTS; ++i)
         {
-            if (server->client_data[i].is_connected == false)
+            for (int i = 0; i < MAX_CLIENTS; ++i)
             {
-                client_index = i;
-                break;
+                if (!server->client_data[i].is_connected)
+                {
+                    client_data = &server->client_data[i];
+                    client_data->is_connected = true;
+                    client_data->fd = client_fd;
+                    client_data->index = i;
+                    slot_index = i;
+                    server->client_count++;
+                    break;
+                }
             }
         }
         pthread_mutex_unlock(&server->client_sockets_mutex);
 
         // If no slot was available then reject the client
-        if (client_index < 0)
+        if (client_data == NULL)
         {
-            printf("No available client slots, rejecting new client (fd=%d)\n", client_fd);
+            printf("No available client slots, rejecting connection (fd=%d)\n", client_fd);
             close(client_fd);
             continue;
         }
 
-        // Assign client to this new slot
-        pthread_mutex_lock(&server->client_sockets_mutex);
-        ClientData *client_data = &server->client_data[client_index];
-        client_data->is_connected = true;
-        client_data->fd = client_fd;
-        client_data->index = client_index;
-        server->client_count++;
-        pthread_mutex_unlock(&server->client_sockets_mutex);
+        printf("Assigned slot %d to connection (fd=%d)\n", slot_index, client_fd);
 
-        // Start a new detached thread to handle the client
+        // Start client thread to handle this connection
         ClientThreadArgs *args = malloc(sizeof(ClientThreadArgs));
         args->server = server;
-        args->index = client_index;
+        args->index = slot_index;
+
         if (pthread_create(&client_data->thread_id, NULL, game_server_client_thread, args) != 0)
         {
             perror("Failed to create client thread");
+
+            pthread_mutex_lock(&server->client_sockets_mutex);
+            {
+                client_data->is_connected = false;
+                server->client_count--;
+            }
+            pthread_mutex_unlock(&server->client_sockets_mutex);
+
             close(client_fd);
             free(args);
             continue;
         }
 
-        printf("Accepted new client from %s:%d (fd=%d, index=%d, thread=%lu)\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port), client_fd, client_index, client_data->thread_id);
+        printf("Client thread started (thread=%lu)\n", client_data->thread_id);
     }
 
     printf("Client accept thread shutting down\n");
+    return NULL;
 }
 
 void *game_server_client_thread(void *arg)
@@ -195,34 +245,101 @@ void *game_server_client_thread(void *arg)
     ClientThreadArgs *args = (ClientThreadArgs *)arg;
     GameServer *server = args->server;
     ClientData *client_data = &server->client_data[args->index];
+    uint32_t player_id = args->index;
     free(args);
 
-    // Listen for client data until they disconnect
+    printf("Client thread started for slot %d (fd=%d)\n", player_id, client_data->fd);
+
+    // Send player ID assignment
+    uint8_t msg_buffer[MAX_MESSAGE_SIZE];
+    size_t msg_size = serialize_assign_id(msg_buffer, player_id);
+    if (send(client_data->fd, msg_buffer, msg_size, 0) < 0)
+    {
+        perror("Failed to send player ID");
+        goto cleanup;
+    }
+    printf("Sent player ID %u to client (fd=%d)\n", player_id, client_data->fd);
+
+    // Add player to game state
+    pthread_mutex_lock(&server->game_state_mutex);
+    {
+        GameState *current_state = &server->game_states[server->server_frame % MAX_ROLLBACK];
+        game_player_join(current_state, player_id);
+    }
+    pthread_mutex_unlock(&server->game_state_mutex);
+
+    // Broadcast to all other clients that this player joined
+    msg_size = serialize_player_joined(msg_buffer, player_id);
+    broadcast_to_all_clients(server, msg_buffer, msg_size, client_data->fd);
+    printf("Broadcasted player %u joined\n", player_id);
+
+    // Listen for client input
     uint8_t buffer[MAX_MESSAGE_SIZE];
     while (client_data->is_connected && !server->to_shutdown)
     {
         ssize_t received = recv(client_data->fd, buffer, sizeof(buffer), 0);
         if (received <= 0) break;
 
-        printf("Received %ld bytes from client %d\n", received, client_data->fd);
+        // Deserialize player input
+        uint32_t frame;
+        uint32_t recv_player_id;
+        PlayerInput input;
+        deserialize_player_events(buffer, received, &frame, &recv_player_id, &input);
 
-        // TODO
+        // Validate player ID matches
+        if (recv_player_id != player_id)
+        {
+            printf("Warning: Client %u sent input for player %u\n", player_id, recv_player_id);
+            continue;
+        }
+
+        printf("Received input from player %u for frame %u: [%d,%d,%d,%d]\n",
+               player_id, frame,
+               input.movements_held[0], input.movements_held[1],
+               input.movements_held[2], input.movements_held[3]);
+
+        // Store the input for this frame
+        pthread_mutex_lock(&server->game_state_mutex);
+        {
+            GameEvents *events = &server->game_events[frame % MAX_ROLLBACK];
+            events->player_inputs[player_id] = input;
+        }
+        pthread_mutex_unlock(&server->game_state_mutex);
     }
 
-    // Client disconnected, remove from connected clients
-    printf("Client finished (thread=%lu fd=%d)\n", client_data->thread_id, client_data->fd);
+cleanup:
+    // Client disconnected
+    printf("Client disconnecting (thread=%lu fd=%d player=%u)\n",
+           client_data->thread_id, client_data->fd, player_id);
 
+    // Remove from connected clients list
     pthread_mutex_lock(&server->client_sockets_mutex);
-    client_data->is_connected = false;
-    server->client_count--;
+    {
+        client_data->is_connected = false;
+        server->client_count--;
+    }
     pthread_mutex_unlock(&server->client_sockets_mutex);
 
-    if (client_data->fd)
+    // Remove player from game state
+    pthread_mutex_lock(&server->game_state_mutex);
+    {
+        GameState *current_state = &server->game_states[server->server_frame % MAX_ROLLBACK];
+        game_player_leave(current_state, player_id);
+    }
+    pthread_mutex_unlock(&server->game_state_mutex);
+
+    // Broadcast player left
+    msg_size = serialize_player_left(msg_buffer, player_id);
+    broadcast_to_all_clients(server, msg_buffer, msg_size, -1);
+    printf("Broadcasted player %u left\n", player_id);
+
+    if (client_data->fd >= 0)
     {
         close(client_data->fd);
         client_data->fd = -1;
     }
 
+    printf("Client thread finished for player %u\n", player_id);
     return NULL;
 }
 
@@ -230,11 +347,50 @@ void *game_simulation_thread(void *arg)
 {
     GameServer *server = (GameServer *)arg;
 
+    // Wait for at least one client to connect before starting simulation
+    printf("Simulation thread waiting for clients to connect...\n");
+    while (!server->to_shutdown && server->client_count == 0)
+    {
+        usleep(100000); // Sleep 100ms
+    }
+
+    if (server->to_shutdown)
+    {
+        printf("Simulation thread shutting down before any clients connected\n");
+        return NULL;
+    }
+
+    printf("Simulation thread starting (client_count=%d)\n", server->client_count);
+
     while (!server->to_shutdown)
     {
-        usleep(1000000 / 15);
+        usleep(1000000 / SIMULATION_TICK_RATE);
 
-        // TODO
+        pthread_mutex_lock(&server->game_state_mutex);
+        {
+            uint32_t current_frame = server->server_frame;
+            uint32_t next_frame = current_frame + 1;
+
+            GameState *current_state = &server->game_states[current_frame % MAX_ROLLBACK];
+            GameEvents *current_events = &server->game_events[current_frame % MAX_ROLLBACK];
+            GameState *next_state = &server->game_states[next_frame % MAX_ROLLBACK];
+
+            // Simulate the game
+            game_simulate(current_state, current_events, next_state);
+
+            // Clear events for next frame
+            memset(&server->game_events[next_frame % MAX_ROLLBACK], 0, sizeof(GameEvents));
+
+            server->server_frame = next_frame;
+
+            printf("Server simulated frame %u -> %u\n", current_frame, next_frame);
+
+            // TODO: Broadcast frame events to all clients
+            // uint8_t buffer[MAX_MESSAGE_SIZE];
+            // size_t msg_size = serialize_frame_events(buffer, current_frame, current_events);
+            // broadcast_to_all_clients(server, buffer, msg_size, -1);
+        }
+        pthread_mutex_unlock(&server->game_state_mutex);
     }
 
     printf("Simulation thread shutting down\n");

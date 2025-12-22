@@ -1,8 +1,8 @@
 #pragma once
 
 #include "shared/gameimpl.h"
-#include <pthread.h> // for threading
-#include <signal.h>  // for signal handling
+#include <pthread.h>
+#include <signal.h>
 
 typedef struct
 {
@@ -27,4 +27,4 @@ GameEvents *game_client_get_events(GameClient *client, uint32_t frame);
 
 void *game_client_recv_thread(void *arg);
 
-void game_client_tick(GameClient *client);
+void game_client_update_server(GameClient *client);
