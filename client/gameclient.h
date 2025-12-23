@@ -1,17 +1,20 @@
 #pragma once
 
 #include "shared/gameimpl.h"
+#include "shared/protocol.h"
 #include <pthread.h>
 #include <signal.h>
+#include <stdatomic.h>
 
 typedef struct
 {
-    volatile sig_atomic_t to_shutdown;
+    atomic_bool to_shutdown;
     bool is_connected;
     int socket_fd;
     pthread_t recv_thread;
     uint32_t client_player_id;
 
+    bool is_initialised;
     uint32_t last_confirmed_frame;
     uint32_t current_frame;
     GameState states[MAX_ROLLBACK];
@@ -28,5 +31,7 @@ GameState *game_client_get_state(GameClient *client, uint32_t frame);
 GameEvents *game_client_get_events(GameClient *client, uint32_t frame);
 
 void *game_client_recv_thread(void *arg);
+
+void game_client_handle_payload(GameClient *client, MessageHeader *header, char *buf, size_t n);
 
 void game_client_update_server(GameClient *client);

@@ -37,7 +37,7 @@ typedef struct
     uint32_t player_id;
 } __attribute__((packed)) PlayerJoinedLeftPayload;
 
-size_t serialize_player_events(uint8_t *buffer, uint32_t frame, uint32_t player_id, const PlayerInput *input);
+size_t serialize_player_events(uint8_t *buffer, uint32_t frame, uint32_t player_id, const GameEvents *events);
 void deserialize_player_events(const uint8_t *buffer, size_t size, uint32_t *out_frame, uint32_t *out_player_id, PlayerInput *out_input);
 
 size_t serialize_frame_events(uint8_t *buffer, uint32_t frame, const GameEvents *events);

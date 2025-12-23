@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,72 +15,53 @@
 int game_server_init(GameServer *server, int port)
 {
     // Initialize game server state
-    server->to_shutdown = false;
+    atomic_init(&server->to_shutdown, 0);
     server->socket_fd = -1;
     server->simulation_thread = 0;
     server->client_accept_thread = 0;
     server->client_sockets_mutex = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
-    server->game_state_mutex = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     memset(server->client_data, 0, sizeof(server->client_data));
     server->client_count = 0;
-    server->server_frame = 0;
 
-    // Initialize game state
+    server->game_state_mutex = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
     memset(server->game_states, 0, sizeof(server->game_states));
     memset(server->game_events, 0, sizeof(server->game_events));
+    server->server_frame = 0;
 
-    // Create listening socket and bind to localhost:PORT
+    pthread_mutex_init(&server->client_sockets_mutex, NULL);
+    pthread_mutex_init(&server->game_state_mutex, NULL);
+
+    // Create listening socket on localhost:PORT
     server->socket_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server->socket_fd < 0)
-    {
-        perror("Failed to create server socket");
-        return 1;
-    }
+    if (server->socket_fd < 0) goto fail;
 
     struct sockaddr_in addr = {0};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port = htons(port);
 
-    if (bind(server->socket_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
-    {
-        perror("Failed to bind server socket");
-        close(server->socket_fd);
-        return 1;
-    }
+    int ret = bind(server->socket_fd, (struct sockaddr *)&addr, sizeof(addr));
+    if (ret != 0) goto fail;
 
-    if (listen(server->socket_fd, SERVER_LISTEN_BACKLOG) < 0)
-    {
-        perror("Failed to listen on server socket");
-        close(server->socket_fd);
-        return 1;
-    }
+    // Listen on this main thread
+    ret = listen(server->socket_fd, SERVER_LISTEN_BACKLOG);
+    if (ret != 0) goto fail;
 
-    printf("Server listening on ANY:%d (fd=%d)\n", port, server->socket_fd);
+    // Start client handling thread
+    ret = pthread_create(&server->client_accept_thread, NULL, game_server_accept_thread, server);
+    if (ret != 0) goto fail;
 
-    // Create thread for handling and accepting clients
-    pthread_mutex_init(&server->client_sockets_mutex, NULL);
-    pthread_mutex_init(&server->game_state_mutex, NULL);
+    // Start simulation thread
+    ret = pthread_create(&server->simulation_thread, NULL, game_simulation_thread, server);
+    if (ret != 0) goto fail;
 
-    if (pthread_create(&server->client_accept_thread, NULL, game_server_accept_thread, server) != 0)
-    {
-        perror("Failed to create client accept thread");
-        game_server_shutdown(server);
-        return 1;
-    }
-
-    printf("Client accept thread started (thread=%lu)\n", server->client_accept_thread);
-
-    // Start thread for game simulation (after accept thread so we can wait for clients)
-    if (pthread_create(&server->simulation_thread, NULL, game_simulation_thread, server) != 0)
-    {
-        perror("Failed to create simulation thread");
-        return 1;
-    }
-
-    printf("Simulation thread started (thread=%lu)\n", server->simulation_thread);
-
+    printf("Server listening on localhost:%d (fd=%d, accept=%lu, sim=%lu)\n", port, server->socket_fd, server->client_accept_thread, server->simulation_thread);
     return 0;
+
+fail:
+    perror("game_server_init");
+    game_server_shutdown(server);
+    return 1;
 }
 
 void game_server_shutdown(GameServer *server)
@@ -357,60 +339,51 @@ void *game_simulation_thread(void *arg)
 {
     GameServer *server = (GameServer *)arg;
 
-    // Wait for at least one client
-    printf("Simulation thread waiting for clients...\n");
-    while (!server->to_shutdown && server->client_count == 0)
-    {
-        usleep(100000);
-    }
+    // Wait for at least one client to be connected
+    while (!server->to_shutdown && server->client_count == 0) usleep(100000);
 
-    printf("Simulation thread starting\n");
-
-    while (!server->to_shutdown)
+    if (!server->to_shutdown)
     {
-        pthread_mutex_lock(&server->game_state_mutex);
+        while (!server->to_shutdown)
         {
-            // Wait until all connected clients have sent input for current frame
-            while (!server->to_shutdown && !all_clients_ready_for_frame(server))
+            pthread_mutex_lock(&server->game_state_mutex);
             {
-                pthread_cond_wait(&server->frame_ready_cond, &server->game_state_mutex);
+                while (!server->to_shutdown && !all_clients_ready_for_frame(server))
+                {
+                    pthread_cond_wait(&server->frame_ready_cond, &server->game_state_mutex);
+                }
+
+                if (server->to_shutdown)
+                {
+                    pthread_mutex_unlock(&server->game_state_mutex);
+                    break;
+                }
+
+                uint32_t current_frame = server->server_frame;
+                uint32_t next_frame = current_frame + 1;
+                GameState *current_state = &server->game_states[current_frame % MAX_ROLLBACK];
+                GameEvents *current_events = &server->game_events[current_frame % MAX_ROLLBACK];
+                GameState *next_state = &server->game_states[next_frame % MAX_ROLLBACK];
+
+                printf("Server simulating frame %u\n", current_frame);
+
+                game_simulate(current_state, current_events, next_state);
+
+                uint8_t buffer[MAX_MESSAGE_SIZE];
+                size_t msg_size = serialize_frame_events(buffer, current_frame, current_events);
+                broadcast_to_all_clients(server, buffer, msg_size, -1);
+
+                server->server_frame = next_frame;
+                memset(&server->game_events[next_frame % MAX_ROLLBACK], 0, sizeof(GameEvents));
+                reset_client_ready_flags(server);
             }
+            pthread_mutex_unlock(&server->game_state_mutex);
 
-            if (server->to_shutdown)
-            {
-                pthread_mutex_unlock(&server->game_state_mutex);
-                break;
-            }
-
-            uint32_t current_frame = server->server_frame;
-            uint32_t next_frame = current_frame + 1;
-
-            GameState *current_state = &server->game_states[current_frame % MAX_ROLLBACK];
-            GameEvents *current_events = &server->game_events[current_frame % MAX_ROLLBACK];
-            GameState *next_state = &server->game_states[next_frame % MAX_ROLLBACK];
-
-            // Simulate the game
-            game_simulate(current_state, current_events, next_state);
-
-            printf("Server simulated frame %u -> %u\n", current_frame, next_frame);
-
-            // Broadcast the inputs for this frame to all clients
-            uint8_t buffer[MAX_MESSAGE_SIZE];
-            size_t msg_size = serialize_frame_events(buffer, current_frame, current_events);
-            broadcast_to_all_clients(server, buffer, msg_size, -1);
-
-            // Move to next frame
-            server->server_frame = next_frame;
-            memset(&server->game_events[next_frame % MAX_ROLLBACK], 0, sizeof(GameEvents));
-            reset_client_ready_flags(server);
+            usleep(1000);
         }
-        pthread_mutex_unlock(&server->game_state_mutex);
-
-        // Don't spin too fast
-        usleep(1000);
     }
 
-    printf("Simulation thread shutting down\n");
+    printf("Client simulation_thread shutting down\n");
     return NULL;
 }
 

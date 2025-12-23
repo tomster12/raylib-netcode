@@ -28,7 +28,7 @@ void handle_sigaction(int signum)
     }
 }
 
-void init_sigaction_handler(struct sigaction* sa)
+void init_sigaction_handler(struct sigaction *sa)
 {
 
     memset(sa, 0, sizeof(*sa));
@@ -38,7 +38,6 @@ void init_sigaction_handler(struct sigaction* sa)
 
     sigaction(SIGINT, sa, NULL);
     sigaction(SIGTERM, sa, NULL);
-
 }
 
 int main()
@@ -51,15 +50,13 @@ int main()
     GameServer server;
     if (game_server_init(&server, PORT) != 0)
     {
-        perror("Failed to initialize game server");
+        perror("game_server_init");
         return 1;
     }
-    
+
     while (!to_shutdown_app) pause();
 
     printf("\nShutting down the game server\n");
     game_server_shutdown(&server);
-
-    printf("Server application finished\n");
     return 0;
 }

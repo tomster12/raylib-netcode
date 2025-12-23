@@ -3,6 +3,7 @@
 #include "shared/gameimpl.h"
 #include <pthread.h>
 #include <signal.h>
+#include <stdatomic.h>
 
 typedef struct
 {
@@ -16,7 +17,7 @@ typedef struct
 
 typedef struct
 {
-    volatile sig_atomic_t to_shutdown;
+    atomic_bool to_shutdown;
     int socket_fd;
     pthread_t simulation_thread;
     pthread_t client_accept_thread;

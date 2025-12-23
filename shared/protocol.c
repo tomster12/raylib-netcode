@@ -5,7 +5,7 @@
 
 // MSG_P2S_PLAYER_EVENTS
 
-size_t serialize_player_events(uint8_t *buffer, uint32_t frame, uint32_t player_id, const PlayerInput *input)
+size_t serialize_player_events(uint8_t *buffer, uint32_t frame, uint32_t player_id, const GameEvents *events)
 {
     size_t offset = 0;
 
@@ -19,7 +19,7 @@ size_t serialize_player_events(uint8_t *buffer, uint32_t frame, uint32_t player_
 
     PlayerEventsPayload payload = {
         .player_id = htonl(player_id),
-        .input = *input,
+        .input = events->player_inputs[player_id],
     };
     memcpy(buffer + offset, &payload, sizeof(payload));
     offset += sizeof(payload);

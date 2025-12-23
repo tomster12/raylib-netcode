@@ -7,6 +7,7 @@
 #include "shared/gameimpl.h"
 #include "shared/globals.h"
 #include <arpa/inet.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -54,29 +55,28 @@ int main()
     GameClient client;
     if (game_client_init(&client, "127.0.0.1", PORT) != 0)
     {
-        perror("Failed to initialize game client");
+        perror("game_client_init");
         CloseWindow();
         return 1;
     }
 
     while (!WindowShouldClose() && !to_shutdown_app && client.is_connected)
     {
-        // Grab current frame and events
+        if (!atomic_load(&client.is_initialised)) continue;
+
         GameState *game_state = game_client_get_state(&client, client.current_frame);
         GameEvents *game_events = game_client_get_events(&client, client.current_frame);
         memset(game_events, 0, sizeof(GameEvents));
 
-        // Handle game events
+        printf("Client simulating frame %u\n", client.current_frame);
+
         game_handle_events(game_state, game_events, client.client_player_id);
 
-        // Perform game simulation
         GameState *game_state_next = game_client_get_state(&client, client.current_frame + 1);
         game_simulate(game_state, game_events, game_state_next);
 
-        // Send this frames events to the server
         game_client_update_server(&client);
 
-        // Draw the game state
         BeginDrawing();
         ClearBackground(RAYWHITE);
         game_render(game_state_next, client.client_player_id);
@@ -85,11 +85,7 @@ int main()
     }
 
     printf("\nShutting down the game client\n");
-
     game_client_shutdown(&client);
     CloseWindow();
-
-    printf("Client application finished\n");
-
     return 0;
 }
