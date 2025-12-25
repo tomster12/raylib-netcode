@@ -12,22 +12,27 @@
 int game_client_init(GameClient *client, const char *server_ip, int port)
 {
     // Initialize game client state
-    atomic_init(&client->to_shutdown, 0);
-    client->is_connected = false;
+    atomic_init(&client->to_shutdown, false);
+    atomic_init(&client->is_connected, false);
+    atomic_init(&client->is_initialised, false);
+
     client->socket_fd = -1;
     client->recv_thread = 0;
-    client->client_player_id = 0;
+    pthread_mutex_init(&client->state_lock, NULL);
 
-    atomic_init(&client->is_initialised, 0);
+    client->client_player_id = 0;
     client->last_confirmed_frame = 0;
     client->current_frame = 0;
     memset(client->states, 0, sizeof(client->states));
     memset(client->events, 0, sizeof(client->events));
-    memset(client->frame_confirmed, 0, sizeof(client->frame_confirmed));
 
     // Ceate socket and connect to localhost:PORT
     client->socket_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (client->socket_fd < 0) goto fail;
+    if (client->socket_fd < 0)
+    {
+        perror("socket()");
+        return 1;
+    }
 
     struct sockaddr_in serv_addr = {0};
     serv_addr.sin_family = AF_INET;
@@ -35,41 +40,45 @@ int game_client_init(GameClient *client, const char *server_ip, int port)
     serv_addr.sin_addr.s_addr = inet_addr(server_ip);
 
     int ret = connect(client->socket_fd, (struct sockaddr *)&serv_addr, sizeof(serv_addr));
-    if (ret != 0) goto fail;
+    if (ret != 0)
+    {
+        perror("connect()");
+        close(client->socket_fd);
+        return 1;
+    }
 
     // Start server listening thread
     ret = pthread_create(&client->recv_thread, NULL, game_client_recv_thread, client);
-    if (ret != 0) goto fail;
+    if (ret != 0)
+    {
+        perror("pthread_create()");
+        game_client_shutdown(client);
+        return 1;
+    }
 
     printf("Game client connected to %s:%d (fd=%d, listen=%lu)\n", server_ip, port, client->socket_fd, client->recv_thread);
-    client->is_connected = true;
+    atomic_store(&client->is_connected, true);
     return 0;
-
-fail:
-    perror("game_client_init");
-    if (client->socket_fd >= 0) close(client->socket_fd);
-    return 1;
 }
 
 void game_client_shutdown(GameClient *client)
 {
     // Signal to threads to stop
-    atomic_store(&client->to_shutdown, 1);
-    client->is_connected = false;
+    atomic_store(&client->to_shutdown, true);
+    atomic_store(&client->is_connected, false);
 
     // Close the connection socket
     if (client->socket_fd >= 0)
     {
-        printf("Closing client socket (fd=%d)\n", client->socket_fd);
+        printf("Closing client socket\n");
         shutdown(client->socket_fd, SHUT_RDWR);
         close(client->socket_fd);
-        client->socket_fd = -1;
     }
 
     // Wait for the listening thread to finish
     if (client->recv_thread)
     {
-        printf("Waiting for receive thread to finish (thread=%lu)\n", client->recv_thread);
+        printf("Waiting for receive thread to finish\n");
         pthread_join(client->recv_thread, NULL);
     }
 
@@ -100,7 +109,7 @@ void *game_client_recv_thread(void *arg)
         if (n == 0)
         {
             // Socket closed intentionally
-            client->is_connected = false;
+            atomic_store(&client->is_connected, false);
             break;
         }
         else if (n < 0)
@@ -108,20 +117,20 @@ void *game_client_recv_thread(void *arg)
             // signal interruption, retry
             if (errno == EINTR)
             {
-                printf("Retry on errono=EINTR\n");
+                printf("Retry on errno=EINTR\n");
                 continue;
             }
 
             // non-blocking socket case
             if (errno == EAGAIN || errno == EWOULDBLOCK)
             {
-                printf("Retry on errono=EAGAIN or errono=EWOULDBLOCK\n");
+                printf("Retry on errno=EAGAIN or errno=EWOULDBLOCK\n");
                 continue;
             }
 
             // Real error
-            perror("recv");
-            client->is_connected = false;
+            printf("Unknown ERRNO from recv: %d\n", errno);
+            atomic_store(&client->is_connected, false);
             break;
         }
 
@@ -129,6 +138,7 @@ void *game_client_recv_thread(void *arg)
         MessageHeader header;
         assert(n >= sizeof(MessageHeader));
         memcpy(&header, buf, sizeof(header));
+
         game_client_handle_payload(client, &header, buf, (size_t)n);
     }
 
@@ -138,26 +148,28 @@ void *game_client_recv_thread(void *arg)
 
 void game_client_handle_payload(GameClient *client, MessageHeader *header, char *buf, size_t n)
 {
-    assert(client->is_initialised);
-
     switch (header->type)
     {
     case MSG_S2P_ASSIGN_ID:
     {
         uint32_t assigned_id;
         deserialize_assign_id((uint8_t *)buf, n, &assigned_id);
-        client->client_player_id = assigned_id;
         printf("Received MSG_S2P_ASSIGN_ID (%u)\n", assigned_id);
 
         // Initialize frame 0 with this player spawned in
-        GameState *initial_state = game_client_get_state(client, 0);
-        memset(initial_state, 0, sizeof(GameState));
-        game_player_join(initial_state, assigned_id);
+        pthread_mutex_lock(&client->state_lock);
+        {
+            GameState *initial_state = game_client_get_state(client, 0);
+            memset(initial_state, 0, sizeof(GameState));
+            game_player_join(initial_state, assigned_id);
 
-        atomic_store(&client->is_initialised, 1);
-        client->last_confirmed_frame = 0;
-        client->current_frame = 0;
-        client->frame_confirmed[0] = true;
+            client->client_player_id = assigned_id;
+            client->last_confirmed_frame = 0;
+            client->current_frame = 0;
+        }
+        pthread_mutex_unlock(&client->state_lock);
+
+        atomic_store_explicit(&client->is_initialised, true, memory_order_release);
         break;
     }
 
@@ -167,8 +179,12 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
         deserialize_player_joined_left((uint8_t *)buf, n, MSG_SB_PLAYER_JOINED, &joined_player_id);
         printf("Received MSG_SB_PLAYER_JOINED (%u)\n", joined_player_id);
 
-        GameState *current_state = game_client_get_state(client, client->current_frame);
-        game_player_join(current_state, joined_player_id);
+        pthread_mutex_lock(&client->state_lock);
+        {
+            GameState *current_state = game_client_get_state(client, client->current_frame);
+            game_player_join(current_state, joined_player_id);
+        }
+        pthread_mutex_unlock(&client->state_lock);
         break;
     }
 
@@ -178,8 +194,12 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
         deserialize_player_joined_left((uint8_t *)buf, n, MSG_SB_PLAYER_LEFT, &left_player_id);
         printf("Received MSG_SB_PLAYER_LEFT (%u)\n", left_player_id);
 
-        GameState *current_state = game_client_get_state(client, client->current_frame);
-        game_player_leave(current_state, left_player_id);
+        pthread_mutex_lock(&client->state_lock);
+        {
+            GameState *current_state = game_client_get_state(client, client->current_frame);
+            game_player_leave(current_state, left_player_id);
+        }
+        pthread_mutex_unlock(&client->state_lock);
         break;
     }
 
@@ -190,16 +210,19 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
         deserialize_frame_events((uint8_t *)buf, n, &server_frame, &server_events);
         printf("Received MSG_S2P_FRAME_EVENTS (%u)\n", server_frame);
 
-        GameEvents *local_events = game_client_get_events(client, server_frame);
-        *local_events = server_events;
-
-        // TODO: Rollback
-
-        client->frame_confirmed[server_frame % MAX_ROLLBACK] = true;
-        if (server_frame > client->last_confirmed_frame)
+        pthread_mutex_lock(&client->state_lock);
         {
-            client->last_confirmed_frame = server_frame;
+            // Copy events into the game client for server frame
+            GameEvents *local_events = game_client_get_events(client, server_frame);
+            *local_events = server_events;
+
+            // TODO: Rollback
+            if (server_frame > client->last_confirmed_frame)
+            {
+                client->last_confirmed_frame = server_frame;
+            }
         }
+        pthread_mutex_unlock(&client->state_lock);
         break;
     }
 
@@ -211,8 +234,6 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
 
 void game_client_update_server(GameClient *client)
 {
-    assert(client->is_initialised);
-
     // Get the events for this frame
     GameEvents *events = game_client_get_events(client, client->current_frame);
 
@@ -227,11 +248,11 @@ void game_client_update_server(GameClient *client)
     ssize_t sent = send(client->socket_fd, buffer, msg_size, 0);
     if (sent < 0)
     {
-        printf("Failed to send player input: %u", client->current_frame);
-        client->is_connected = false;
+        printf("Client failed to send frame %u", client->current_frame);
+        atomic_store(&client->is_connected, false);
         return;
     }
 
-    printf("Client updated server, frame=%u, sent %zd bytes\n", client->current_frame, sent);
+    printf("Client sent frame %u to server (%zd bytes)\n", client->current_frame, sent);
     client->current_frame++;
 }

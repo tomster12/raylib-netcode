@@ -7,7 +7,7 @@
 
 typedef struct
 {
-    bool is_connected;
+    atomic_bool is_connected;
     int fd;
     int index;
     pthread_t thread_id;
@@ -18,18 +18,19 @@ typedef struct
 typedef struct
 {
     atomic_bool to_shutdown;
+
     int socket_fd;
     pthread_t simulation_thread;
     pthread_t client_accept_thread;
-    pthread_mutex_t client_sockets_mutex;
-    ClientData client_data[MAX_CLIENTS];
-    int client_count;
-
-    pthread_mutex_t game_state_mutex;
+    pthread_mutex_t clients_lock;
+    pthread_mutex_t state_lock;
     pthread_cond_t frame_ready_cond;
+
+    int client_count;
+    uint32_t server_frame;
+    ClientData client_data[MAX_CLIENTS];
     GameState game_states[MAX_ROLLBACK];
     GameEvents game_events[MAX_ROLLBACK];
-    uint32_t server_frame;
 } GameServer;
 
 typedef struct

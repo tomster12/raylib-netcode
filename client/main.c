@@ -18,20 +18,12 @@ volatile sig_atomic_t to_shutdown_app = 0;
 
 void handle_sigaction(int signum)
 {
-    if (signum == SIGINT || signum == SIGTERM)
-    {
-        printf("Received sigaction signum=%d\n", signum);
-        to_shutdown_app = 1;
-    }
-    else
-    {
-        perror("Unexpected signal received");
-    }
+    (void)signum;
+    to_shutdown_app = 1;
 }
 
 void init_sigaction_handler(struct sigaction *sa)
 {
-
     memset(sa, 0, sizeof(*sa));
 
     sa->sa_handler = handle_sigaction;
@@ -60,28 +52,35 @@ int main()
         return 1;
     }
 
-    while (!WindowShouldClose() && !to_shutdown_app && client.is_connected)
+    while (!WindowShouldClose() && !to_shutdown_app && atomic_load(&client.is_connected))
     {
-        if (!atomic_load(&client.is_initialised)) continue;
+        if (!atomic_load_explicit(&client.is_initialised, memory_order_acquire))
+        {
+            continue;
+        }
 
-        GameState *game_state = game_client_get_state(&client, client.current_frame);
-        GameEvents *game_events = game_client_get_events(&client, client.current_frame);
-        memset(game_events, 0, sizeof(GameEvents));
+        pthread_mutex_lock(&client.state_lock);
+        {
+            GameState *game_state = game_client_get_state(&client, client.current_frame);
+            GameEvents *game_events = game_client_get_events(&client, client.current_frame);
+            memset(game_events, 0, sizeof(GameEvents));
 
-        printf("Client simulating frame %u\n", client.current_frame);
+            printf("Client simulating frame %u\n", client.current_frame);
 
-        game_handle_events(game_state, game_events, client.client_player_id);
+            game_handle_events(game_state, game_events, client.client_player_id);
 
-        GameState *game_state_next = game_client_get_state(&client, client.current_frame + 1);
-        game_simulate(game_state, game_events, game_state_next);
+            GameState *game_state_next = game_client_get_state(&client, client.current_frame + 1);
+            game_simulate(game_state, game_events, game_state_next);
 
-        game_client_update_server(&client);
+            game_client_update_server(&client);
 
-        BeginDrawing();
-        ClearBackground(RAYWHITE);
-        game_render(game_state_next, client.client_player_id);
-        DrawFPS(10, 10);
-        EndDrawing();
+            BeginDrawing();
+            ClearBackground(RAYWHITE);
+            game_render(game_state_next, client.client_player_id);
+            DrawFPS(10, 10);
+            EndDrawing();
+        }
+        pthread_mutex_unlock(&client.state_lock);
     }
 
     printf("\nShutting down the game client\n");

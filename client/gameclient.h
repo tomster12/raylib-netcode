@@ -9,12 +9,14 @@
 typedef struct
 {
     atomic_bool to_shutdown;
-    bool is_connected;
+    atomic_bool is_connected;
+    atomic_bool is_initialised;
+
     int socket_fd;
     pthread_t recv_thread;
-    uint32_t client_player_id;
+    pthread_mutex_t state_lock;
 
-    bool is_initialised;
+    uint32_t client_player_id;
     uint32_t last_confirmed_frame;
     uint32_t current_frame;
     GameState states[MAX_ROLLBACK];

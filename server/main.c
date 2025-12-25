@@ -17,20 +17,12 @@ volatile sig_atomic_t to_shutdown_app = 0;
 
 void handle_sigaction(int signum)
 {
-    if (signum == SIGINT || signum == SIGTERM)
-    {
-        printf("Received sigaction signum=%d\n", signum);
-        to_shutdown_app = 1;
-    }
-    else
-    {
-        perror("Unexpected signal received");
-    }
+    printf("Received sigaction signum=%d\n", signum);
+    to_shutdown_app = 1;
 }
 
 void init_sigaction_handler(struct sigaction *sa)
 {
-
     memset(sa, 0, sizeof(*sa));
 
     sa->sa_handler = handle_sigaction;
