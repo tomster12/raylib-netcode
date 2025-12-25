@@ -61,15 +61,13 @@ int main()
 
         pthread_mutex_lock(&client.state_lock);
         {
-            GameState *game_state = game_client_get_state(&client, client.current_frame);
-            GameEvents *game_events = game_client_get_events(&client, client.current_frame);
+            GameState *game_state = &client.states[client.client_frame % FRAME_BUFFER_SIZE];
+            GameEvents *game_events = &client.events[client.client_frame % FRAME_BUFFER_SIZE];
             memset(game_events, 0, sizeof(GameEvents));
-
-            printf("Client simulating frame %u\n", client.current_frame);
 
             game_handle_events(game_state, game_events, client.client_player_id);
 
-            GameState *game_state_next = game_client_get_state(&client, client.current_frame + 1);
+            GameState *game_state_next = &client.states[client.client_frame + 1 % FRAME_BUFFER_SIZE];
             game_simulate(game_state, game_events, game_state_next);
 
             game_client_update_server(&client);

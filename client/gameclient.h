@@ -17,20 +17,15 @@ typedef struct
     pthread_mutex_t state_lock;
 
     uint32_t client_player_id;
-    uint32_t last_confirmed_frame;
-    uint32_t current_frame;
-    GameState states[MAX_ROLLBACK];
-    GameEvents events[MAX_ROLLBACK];
-    bool frame_confirmed[MAX_ROLLBACK];
+    uint32_t server_frame;
+    uint32_t client_frame;
+    GameState states[FRAME_BUFFER_SIZE];
+    GameEvents events[FRAME_BUFFER_SIZE];
 } GameClient;
 
 int game_client_init(GameClient *client, const char *server_ip, int port);
 
 void game_client_shutdown(GameClient *client);
-
-GameState *game_client_get_state(GameClient *client, uint32_t frame);
-
-GameEvents *game_client_get_events(GameClient *client, uint32_t frame);
 
 void *game_client_recv_thread(void *arg);
 

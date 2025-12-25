@@ -21,8 +21,8 @@ int game_client_init(GameClient *client, const char *server_ip, int port)
     pthread_mutex_init(&client->state_lock, NULL);
 
     client->client_player_id = 0;
-    client->last_confirmed_frame = 0;
-    client->current_frame = 0;
+    client->server_frame = 0;
+    client->client_frame = 0;
     memset(client->states, 0, sizeof(client->states));
     memset(client->events, 0, sizeof(client->events));
 
@@ -75,24 +75,14 @@ void game_client_shutdown(GameClient *client)
         close(client->socket_fd);
     }
 
-    // Wait for the listening thread to finish
+    // Wait for the listening thread
     if (client->recv_thread)
     {
-        printf("Waiting for receive thread to finish\n");
+        printf("Waiting for receive thread\n");
         pthread_join(client->recv_thread, NULL);
     }
 
     printf("Game client shutdown\n");
-}
-
-GameState *game_client_get_state(GameClient *client, uint32_t frame)
-{
-    return &client->states[frame % MAX_ROLLBACK];
-}
-
-GameEvents *game_client_get_events(GameClient *client, uint32_t frame)
-{
-    return &client->events[frame % MAX_ROLLBACK];
 }
 
 void *game_client_recv_thread(void *arg)
@@ -142,7 +132,7 @@ void *game_client_recv_thread(void *arg)
         game_client_handle_payload(client, &header, buf, (size_t)n);
     }
 
-    printf("Client recv_thread shutting down\n");
+    printf("Client recv_thread shutdown\n");
     return NULL;
 }
 
@@ -159,13 +149,13 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
         // Initialize frame 0 with this player spawned in
         pthread_mutex_lock(&client->state_lock);
         {
-            GameState *initial_state = game_client_get_state(client, 0);
+            GameState *initial_state = &client->states[0];
             memset(initial_state, 0, sizeof(GameState));
             game_player_join(initial_state, assigned_id);
 
             client->client_player_id = assigned_id;
-            client->last_confirmed_frame = 0;
-            client->current_frame = 0;
+            client->server_frame = 0;
+            client->client_frame = 0;
         }
         pthread_mutex_unlock(&client->state_lock);
 
@@ -181,7 +171,7 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
 
         pthread_mutex_lock(&client->state_lock);
         {
-            GameState *current_state = game_client_get_state(client, client->current_frame);
+            GameState *current_state = &client->states[client->client_frame];
             game_player_join(current_state, joined_player_id);
         }
         pthread_mutex_unlock(&client->state_lock);
@@ -196,7 +186,7 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
 
         pthread_mutex_lock(&client->state_lock);
         {
-            GameState *current_state = game_client_get_state(client, client->current_frame);
+            GameState *current_state = &client->states[client->client_frame];
             game_player_leave(current_state, left_player_id);
         }
         pthread_mutex_unlock(&client->state_lock);
@@ -213,13 +203,13 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
         pthread_mutex_lock(&client->state_lock);
         {
             // Copy events into the game client for server frame
-            GameEvents *local_events = game_client_get_events(client, server_frame);
+            GameEvents *local_events = &client->events[server_frame % FRAME_BUFFER_SIZE];
             *local_events = server_events;
 
             // TODO: Rollback
-            if (server_frame > client->last_confirmed_frame)
+            if (server_frame > client->server_frame)
             {
-                client->last_confirmed_frame = server_frame;
+                client->server_frame = server_frame;
             }
         }
         pthread_mutex_unlock(&client->state_lock);
@@ -235,24 +225,24 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
 void game_client_update_server(GameClient *client)
 {
     // Get the events for this frame
-    GameEvents *events = game_client_get_events(client, client->current_frame);
+    GameEvents *events = &client->events[client->client_frame % FRAME_BUFFER_SIZE];
 
     // Serialize and send to server
     uint8_t buffer[MAX_MESSAGE_SIZE];
     size_t msg_size = serialize_player_events(
         buffer,
-        client->current_frame,
+        client->client_frame,
         client->client_player_id,
         events);
 
     ssize_t sent = send(client->socket_fd, buffer, msg_size, 0);
     if (sent < 0)
     {
-        printf("Client failed to send frame %u", client->current_frame);
+        printf("Client failed to send frame %u", client->client_frame);
         atomic_store(&client->is_connected, false);
         return;
     }
 
-    printf("Client sent frame %u to server (%zd bytes)\n", client->current_frame, sent);
-    client->current_frame++;
+    printf("Client sent frame %u to server (%zd bytes)\n", client->client_frame, sent);
+    client->client_frame++;
 }

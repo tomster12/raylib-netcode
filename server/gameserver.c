@@ -22,7 +22,7 @@ int game_server_init(GameServer *server, int port)
     server->client_accept_thread = 0;
     pthread_mutex_init(&server->clients_lock, NULL);
     pthread_mutex_init(&server->state_lock, NULL);
-    pthread_cond_init(&server->frame_ready_cond, NULL);
+    pthread_cond_init(&server->simulation_loop_cond, NULL);
 
     server->client_count = 0;
     server->server_frame = 0;
@@ -95,16 +95,18 @@ void game_server_shutdown(GameServer *server)
         server->socket_fd = -1;
     }
 
-    // Wait for threads to finish
+    pthread_cond_signal(&server->simulation_loop_cond);
+
+    // Wait for threads
     if (server->simulation_thread)
     {
-        printf("Waiting for simulation loop to finish\n");
+        printf("Waiting for simulation loop\n");
         pthread_join(server->simulation_thread, NULL);
     }
 
     if (server->client_accept_thread)
     {
-        printf("Waiting for client accept loop to finish\n");
+        printf("Waiting for client accept loop\n");
         pthread_join(server->client_accept_thread, NULL);
     }
 
@@ -115,7 +117,7 @@ void game_server_shutdown(GameServer *server)
         {
             if (server->client_data[i].is_connected)
             {
-                printf("Waiting for client %d to finish\n", i);
+                printf("Waiting for client %d\n", i);
 
                 shutdown(server->client_data[i].fd, SHUT_RDWR);
                 pthread_join(server->client_data[i].thread_id, NULL);
@@ -129,7 +131,7 @@ void game_server_shutdown(GameServer *server)
 
     pthread_mutex_destroy(&server->clients_lock);
     pthread_mutex_destroy(&server->state_lock);
-    pthread_cond_destroy(&server->frame_ready_cond);
+    pthread_cond_destroy(&server->simulation_loop_cond);
 
     printf("Game server shutdown\n");
 }
@@ -145,7 +147,7 @@ void broadcast_to_all_clients(GameServer *server, const uint8_t *buffer, size_t 
                 ssize_t sent = send(server->client_data[i].fd, buffer, size, 0);
                 if (sent < 0)
                 {
-                    printf("Failed to broadcast to client %d: %d", i, sent);
+                    printf("Failed to broadcast to client %d: %zu", i, sent);
                 }
             }
         }
@@ -237,7 +239,7 @@ void *game_server_accept_thread(void *arg)
         pthread_mutex_unlock(&server->clients_lock);
     }
 
-    printf("Client accept thread shutting down\n");
+    printf("Client accept thread shutdown\n");
     return NULL;
 }
 
@@ -264,7 +266,7 @@ void *game_server_client_thread(void *arg)
     // Add player to game state
     pthread_mutex_lock(&server->state_lock);
     {
-        GameState *current_state = &server->game_states[server->server_frame % MAX_ROLLBACK];
+        GameState *current_state = &server->game_states[server->server_frame % FRAME_BUFFER_SIZE];
         game_player_join(current_state, client_index);
     }
     pthread_mutex_unlock(&server->state_lock);
@@ -301,18 +303,14 @@ void *game_server_client_thread(void *arg)
 
         pthread_mutex_lock(&server->state_lock);
         {
-            // Store the input
-            GameEvents *events = &server->game_events[frame % MAX_ROLLBACK];
+            // Read the client events into the server data
+            GameEvents *events = &server->game_events[frame % FRAME_BUFFER_SIZE];
             events->player_inputs[client_index] = input;
+            client_data->client_frame = frame;
 
-            // Mark this client as ready
-            client_data->ready_for_frame = true;
-            client_data->last_received_frame = frame;
-
-            // Signal simulation thread if all clients are now ready
-            if (all_clients_ready_for_frame(server))
+            if (can_simulate_frame(server))
             {
-                pthread_cond_signal(&server->frame_ready_cond);
+                pthread_cond_signal(&server->simulation_loop_cond);
             }
         }
         pthread_mutex_unlock(&server->state_lock);
@@ -334,7 +332,7 @@ cleanup:
     // Remove player from game state
     pthread_mutex_lock(&server->state_lock);
     {
-        GameState *current_state = &server->game_states[server->server_frame % MAX_ROLLBACK];
+        GameState *current_state = &server->game_states[server->server_frame % FRAME_BUFFER_SIZE];
         game_player_leave(current_state, client_index);
     }
     pthread_mutex_unlock(&server->state_lock);
@@ -363,9 +361,9 @@ void *game_simulation_thread(void *arg)
         pthread_mutex_lock(&server->state_lock);
         {
             // Wait to have all clients frames
-            while (!atomic_load(&server->to_shutdown) && !all_clients_ready_for_frame(server))
+            while (!atomic_load(&server->to_shutdown) && !can_simulate_frame(server))
             {
-                pthread_cond_wait(&server->frame_ready_cond, &server->state_lock);
+                pthread_cond_wait(&server->simulation_loop_cond, &server->state_lock);
             }
 
             if (atomic_load(&server->to_shutdown))
@@ -375,31 +373,31 @@ void *game_simulation_thread(void *arg)
             }
 
             // Simulate the frame with all clients events
-            uint32_t current_frame = server->server_frame;
-            uint32_t next_frame = current_frame + 1;
-            GameState *current_state = &server->game_states[current_frame % MAX_ROLLBACK];
-            GameEvents *current_events = &server->game_events[current_frame % MAX_ROLLBACK];
-            GameState *next_state = &server->game_states[next_frame % MAX_ROLLBACK];
+            uint32_t client_frame = server->server_frame;
+            uint32_t next_frame = client_frame + 1;
+            GameState *current_state = &server->game_states[client_frame % FRAME_BUFFER_SIZE];
+            GameEvents *current_events = &server->game_events[client_frame % FRAME_BUFFER_SIZE];
+            GameState *next_state = &server->game_states[next_frame % FRAME_BUFFER_SIZE];
 
-            printf("Server simulating frame %u\n", current_frame);
+            printf("Server simulating frame %u\n", client_frame);
 
             game_simulate(current_state, current_events, next_state);
 
             uint8_t buffer[MAX_MESSAGE_SIZE];
-            size_t msg_size = serialize_frame_events(buffer, current_frame, current_events);
+            size_t msg_size = serialize_frame_events(buffer, client_frame, current_events);
             broadcast_to_all_clients(server, buffer, msg_size, -1);
 
             server->server_frame = next_frame;
-            memset(&server->game_events[next_frame % MAX_ROLLBACK], 0, sizeof(GameEvents));
+            memset(&server->game_events[next_frame % FRAME_BUFFER_SIZE], 0, sizeof(GameEvents));
         }
         pthread_mutex_unlock(&server->state_lock);
     }
 
-    printf("Client simulation_thread shutting down\n");
+    printf("Client simulation_thread shutdown\n");
     return NULL;
 }
 
-bool all_clients_ready_for_frame(GameServer *server)
+bool can_simulate_frame(GameServer *server)
 {
     pthread_mutex_lock(&server->clients_lock);
     {
@@ -407,7 +405,7 @@ bool all_clients_ready_for_frame(GameServer *server)
 
         for (int i = 0; i < MAX_CLIENTS; i++)
         {
-            if (server->client_data[i].is_connected && !server->client_data[i].ready_for_frame)
+            if (server->client_data[i].is_connected && server->client_data[i].client_frame <= server->server_frame)
             {
                 pthread_mutex_unlock(&server->clients_lock);
                 return false;

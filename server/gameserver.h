@@ -11,8 +11,7 @@ typedef struct
     int fd;
     int index;
     pthread_t thread_id;
-    uint32_t last_received_frame;
-    bool ready_for_frame;
+    uint32_t client_frame;
 } ClientData;
 
 typedef struct
@@ -24,13 +23,13 @@ typedef struct
     pthread_t client_accept_thread;
     pthread_mutex_t clients_lock;
     pthread_mutex_t state_lock;
-    pthread_cond_t frame_ready_cond;
+    pthread_cond_t simulation_loop_cond;
 
     int client_count;
     uint32_t server_frame;
     ClientData client_data[MAX_CLIENTS];
-    GameState game_states[MAX_ROLLBACK];
-    GameEvents game_events[MAX_ROLLBACK];
+    GameState game_states[FRAME_BUFFER_SIZE];
+    GameEvents game_events[FRAME_BUFFER_SIZE];
 } GameServer;
 
 typedef struct
@@ -51,6 +50,6 @@ void *game_server_client_thread(void *arg);
 
 void *game_simulation_thread(void *arg);
 
-bool all_clients_ready_for_frame(GameServer *server);
+bool can_simulate_frame(GameServer *server);
 
 void reset_client_ready_flags(GameServer *server);
