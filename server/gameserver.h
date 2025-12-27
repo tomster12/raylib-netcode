@@ -4,10 +4,11 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
+#include <unistd.h>
 
 typedef struct
 {
-    atomic_bool is_connected;
+    bool is_connected;
     int fd;
     int index;
     pthread_t thread_id;
@@ -39,17 +40,10 @@ typedef struct
 } ClientThreadArgs;
 
 int game_server_init(GameServer *server, int port);
-
 void game_server_shutdown(GameServer *server);
-
-void broadcast_to_all_clients(GameServer *server, const uint8_t *buffer, size_t size, int exclude_fd);
-
 void *game_server_accept_thread(void *arg);
-
 void *game_server_client_thread(void *arg);
-
 void *game_simulation_thread(void *arg);
 
-bool can_simulate_frame(GameServer *server);
-
-void reset_client_ready_flags(GameServer *server);
+ssize_t game_server_broadcast(GameServer *server, const uint8_t *buffer, size_t size, int exclude_fd);
+bool game_server_can_simulate(GameServer *server);

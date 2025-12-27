@@ -61,20 +61,35 @@ int main()
 
         pthread_mutex_lock(&client.state_lock);
         {
-            GameState *game_state = &client.states[client.client_frame % FRAME_BUFFER_SIZE];
-            GameEvents *game_events = &client.events[client.client_frame % FRAME_BUFFER_SIZE];
-            memset(game_events, 0, sizeof(GameEvents));
+            // Error state if client is too far ahead of server
+            if (client.client_frame >= client.sync_frame + FRAME_BUFFER_SIZE)
+            {
+                printf("WARN: Client frame %u further than buffer size %d from sync frame %u", client.client_frame, FRAME_BUFFER_SIZE, client.sync_frame);
+                usleep(1000 * 1000);
+                pthread_mutex_unlock(&client.state_lock);
+                continue;
+            }
 
-            game_handle_events(game_state, game_events, client.client_player_id);
+            // Read in local events and simulate another frame forward
+            GameState *current_state = &client.states[client.client_frame % FRAME_BUFFER_SIZE];
+            GameEvents *current_events = &client.events[client.client_frame % FRAME_BUFFER_SIZE];
+            GameState *next_state = &client.states[(client.client_frame + 1) % FRAME_BUFFER_SIZE];
 
-            GameState *game_state_next = &client.states[client.client_frame + 1 % FRAME_BUFFER_SIZE];
-            game_simulate(game_state, game_events, game_state_next);
+            printf("Client simulating frame %u\n", client.client_frame);
 
-            game_client_update_server(&client);
+            memset(current_events, 0, sizeof(GameEvents));
+            game_handle_events(current_state, current_events, client.client_player_id);
+            game_simulate(current_state, current_events, next_state);
 
+            client.client_frame++;
+
+            // Send the local events to the server
+            game_client_send_server_events(&client, client.client_frame - 1);
+
+            // Render the new generated frame
             BeginDrawing();
             ClearBackground(RAYWHITE);
-            game_render(game_state_next, client.client_player_id);
+            game_render(next_state, client.client_player_id);
             DrawFPS(10, 10);
             EndDrawing();
         }

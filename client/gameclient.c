@@ -20,9 +20,10 @@ int game_client_init(GameClient *client, const char *server_ip, int port)
     client->recv_thread = 0;
     pthread_mutex_init(&client->state_lock, NULL);
 
-    client->client_player_id = 0;
-    client->server_frame = 0;
-    client->client_frame = 0;
+    client->client_player_id = -1;
+    client->sync_frame = -1;
+    client->server_frame = -1;
+    client->client_frame = -1;
     memset(client->states, 0, sizeof(client->states));
     memset(client->events, 0, sizeof(client->events));
 
@@ -90,48 +91,21 @@ void *game_client_recv_thread(void *arg)
     GameClient *client = (GameClient *)arg;
 
     // Keep receiving until signalled to shutdown
+    uint8_t buffer[MAX_MESSAGE_SIZE];
     while (!atomic_load(&client->to_shutdown))
     {
-        char buf[MAX_MESSAGE_SIZE];
-        ssize_t n = recv(client->socket_fd, buf, sizeof(buf), 0);
-
-        // Handle socket recv failures
-        if (n == 0)
-        {
-            // Socket closed intentionally
-            atomic_store(&client->is_connected, false);
-            break;
-        }
-        else if (n < 0)
-        {
-            // signal interruption, retry
-            if (errno == EINTR)
-            {
-                printf("Retry on errno=EINTR\n");
-                continue;
-            }
-
-            // non-blocking socket case
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
-            {
-                printf("Retry on errno=EAGAIN or errno=EWOULDBLOCK\n");
-                continue;
-            }
-
-            // Real error
-            printf("Unknown ERRNO from recv: %d\n", errno);
-            atomic_store(&client->is_connected, false);
-            break;
-        }
+        ssize_t received = recv(client->socket_fd, buffer, sizeof(buffer), 0);
+        if (received <= 0) break;
 
         // Read in the message header then switch on message type
         MessageHeader header;
-        assert(n >= sizeof(MessageHeader));
-        memcpy(&header, buf, sizeof(header));
+        assert(received >= sizeof(MessageHeader));
+        memcpy(&header, buffer, sizeof(header));
 
-        game_client_handle_payload(client, &header, buf, (size_t)n);
+        game_client_handle_payload(client, &header, buffer, (size_t)received);
     }
 
+    atomic_store(&client->is_connected, false);
     printf("Client recv_thread shutdown\n");
     return NULL;
 }
@@ -144,7 +118,7 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
     {
         uint32_t assigned_id;
         deserialize_assign_id((uint8_t *)buf, n, &assigned_id);
-        printf("Received MSG_S2P_ASSIGN_ID (%u)\n", assigned_id);
+        printf("Received MSG_S2P_ASSIGN_ID as player %u\n", assigned_id);
 
         // Initialize frame 0 with this player spawned in
         pthread_mutex_lock(&client->state_lock);
@@ -154,6 +128,7 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
             game_player_join(initial_state, assigned_id);
 
             client->client_player_id = assigned_id;
+            client->sync_frame = 0;
             client->server_frame = 0;
             client->client_frame = 0;
         }
@@ -167,7 +142,7 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
     {
         uint32_t joined_player_id;
         deserialize_player_joined_left((uint8_t *)buf, n, MSG_SB_PLAYER_JOINED, &joined_player_id);
-        printf("Received MSG_SB_PLAYER_JOINED (%u)\n", joined_player_id);
+        printf("Received MSG_SB_PLAYER_JOINED for player %u\n", joined_player_id);
 
         pthread_mutex_lock(&client->state_lock);
         {
@@ -182,7 +157,7 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
     {
         uint32_t left_player_id;
         deserialize_player_joined_left((uint8_t *)buf, n, MSG_SB_PLAYER_LEFT, &left_player_id);
-        printf("Received MSG_SB_PLAYER_LEFT (%u)\n", left_player_id);
+        printf("Received MSG_SB_PLAYER_LEFT for player %u\n", left_player_id);
 
         pthread_mutex_lock(&client->state_lock);
         {
@@ -196,21 +171,25 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
     case MSG_S2P_FRAME_EVENTS:
     {
         uint32_t server_frame;
-        GameEvents server_events;
-        deserialize_frame_events((uint8_t *)buf, n, &server_frame, &server_events);
-        printf("Received MSG_S2P_FRAME_EVENTS (%u)\n", server_frame);
+        GameEvents server_frame_events;
+        deserialize_frame_events((uint8_t *)buf, n, &server_frame, &server_frame_events);
+        printf("Received MSG_S2P_FRAME_EVENTS for frame %u\n", server_frame);
 
         pthread_mutex_lock(&client->state_lock);
         {
-            // Copy events into the game client for server frame
-            GameEvents *local_events = &client->events[server_frame % FRAME_BUFFER_SIZE];
-            *local_events = server_events;
-
-            // TODO: Rollback
-            if (server_frame > client->server_frame)
+            if (server_frame != client->server_frame + 1)
             {
-                client->server_frame = server_frame;
+                printf("Server frame %u unexpected, expected %d\n", server_frame, client->server_frame + 1);
+                pthread_mutex_unlock(&client->state_lock);
+                break;
             }
+
+            // Copy events into the game client for server frame
+            GameEvents *frame_events = &client->events[server_frame % FRAME_BUFFER_SIZE];
+            *frame_events = server_frame_events;
+            client->server_frame = server_frame;
+
+            game_client_reconcile_frames(client);
         }
         pthread_mutex_unlock(&client->state_lock);
         break;
@@ -222,27 +201,31 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
     }
 }
 
-void game_client_update_server(GameClient *client)
+void game_client_reconcile_frames(GameClient *client)
 {
-    // Get the events for this frame
-    GameEvents *events = &client->events[client->client_frame % FRAME_BUFFER_SIZE];
+    // Reconcile from sync_frame -> server_frame with new real data
+    // Then from server_frame -> client_frame with local data
+}
 
+void game_client_send_server_events(GameClient *client, uint32_t frame)
+{
     // Serialize and send to server
+    GameEvents *events = &client->events[frame % FRAME_BUFFER_SIZE];
+
     uint8_t buffer[MAX_MESSAGE_SIZE];
     size_t msg_size = serialize_player_events(
         buffer,
-        client->client_frame,
+        frame,
         client->client_player_id,
         events);
 
     ssize_t sent = send(client->socket_fd, buffer, msg_size, 0);
     if (sent < 0)
     {
-        printf("Client failed to send frame %u", client->client_frame);
+        printf("Client failed to send frame %u", frame);
         atomic_store(&client->is_connected, false);
         return;
     }
 
-    printf("Client sent frame %u to server (%zd bytes)\n", client->client_frame, sent);
-    client->client_frame++;
+    printf("Sent MSG_P2S_PLAYER_EVENTS for frame %u\n", frame);
 }
