@@ -20,7 +20,7 @@ int game_client_init(GameClient *client, const char *server_ip, int port)
     client->recv_thread = 0;
     pthread_mutex_init(&client->state_lock, NULL);
 
-    client->client_player_id = -1;
+    client->client_index = -1;
     client->sync_frame = -1;
     client->server_frame = -1;
     client->client_frame = -1;
@@ -114,23 +114,24 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
 {
     switch (header->type)
     {
-    case MSG_S2P_ASSIGN_ID:
+    case MSG_S2P_INIT_PLAYER:
     {
-        uint32_t assigned_id;
-        deserialize_assign_id((uint8_t *)buf, n, &assigned_id);
-        printf("Received MSG_S2P_ASSIGN_ID as player %u\n", assigned_id);
+        uint32_t client_index;
+        deserialize_init_player((uint8_t *)buf, n, &client_index);
+        printf("Received MSG_S2P_INIT_PLAYER as player %u\n", client_index);
 
-        // Initialize frame 0 with this player spawned in
+        // Initialize frame 0 with the player join
         pthread_mutex_lock(&client->state_lock);
         {
             GameState *initial_state = &client->states[0];
             memset(initial_state, 0, sizeof(GameState));
-            game_player_join(initial_state, assigned_id);
 
-            client->client_player_id = assigned_id;
+            client->client_index = client_index;
             client->sync_frame = 0;
             client->server_frame = 0;
             client->client_frame = 0;
+
+            client->events[client->client_frame].player_events[client->client_index] = PLAYER_EVENT_JOIN;
         }
         pthread_mutex_unlock(&client->state_lock);
 
@@ -138,42 +139,12 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
         break;
     }
 
-    case MSG_SB_PLAYER_JOINED:
-    {
-        uint32_t joined_player_id;
-        deserialize_player_joined_left((uint8_t *)buf, n, MSG_SB_PLAYER_JOINED, &joined_player_id);
-        printf("Received MSG_SB_PLAYER_JOINED for player %u\n", joined_player_id);
-
-        pthread_mutex_lock(&client->state_lock);
-        {
-            GameState *current_state = &client->states[client->client_frame];
-            game_player_join(current_state, joined_player_id);
-        }
-        pthread_mutex_unlock(&client->state_lock);
-        break;
-    }
-
-    case MSG_SB_PLAYER_LEFT:
-    {
-        uint32_t left_player_id;
-        deserialize_player_joined_left((uint8_t *)buf, n, MSG_SB_PLAYER_LEFT, &left_player_id);
-        printf("Received MSG_SB_PLAYER_LEFT for player %u\n", left_player_id);
-
-        pthread_mutex_lock(&client->state_lock);
-        {
-            GameState *current_state = &client->states[client->client_frame];
-            game_player_leave(current_state, left_player_id);
-        }
-        pthread_mutex_unlock(&client->state_lock);
-        break;
-    }
-
-    case MSG_S2P_FRAME_EVENTS:
+    case MSG_S2P_GAME_EVENTS:
     {
         uint32_t server_frame;
         GameEvents server_frame_events;
         deserialize_frame_events((uint8_t *)buf, n, &server_frame, &server_frame_events);
-        printf("Received MSG_S2P_FRAME_EVENTS for frame %u\n", server_frame);
+        printf("Received MSG_S2P_GAME_EVENTS for frame %u\n", server_frame);
 
         pthread_mutex_lock(&client->state_lock);
         {
@@ -207,16 +178,16 @@ void game_client_reconcile_frames(GameClient *client)
     // Then from server_frame -> client_frame with local data
 }
 
-void game_client_send_server_events(GameClient *client, uint32_t frame)
+void game_client_send_game_events(GameClient *client, uint32_t frame)
 {
     // Serialize and send to server
     GameEvents *events = &client->events[frame % FRAME_BUFFER_SIZE];
 
     uint8_t buffer[MAX_MESSAGE_SIZE];
-    size_t msg_size = serialize_player_events(
+    size_t msg_size = serialize_game_events(
         buffer,
         frame,
-        client->client_player_id,
+        client->client_index,
         events);
 
     ssize_t sent = send(client->socket_fd, buffer, msg_size, 0);
@@ -227,5 +198,5 @@ void game_client_send_server_events(GameClient *client, uint32_t frame)
         return;
     }
 
-    printf("Sent MSG_P2S_PLAYER_EVENTS for frame %u\n", frame);
+    printf("Sent MSG_P2S_GAME_EVENTS for frame %u\n", frame);
 }

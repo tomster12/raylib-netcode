@@ -3,14 +3,14 @@
 #include <assert.h>
 #include <string.h>
 
-// MSG_P2S_PLAYER_EVENTS
+// MSG_P2S_GAME_EVENTS
 
-size_t serialize_player_events(uint8_t *buffer, uint32_t frame, uint32_t player_id, const GameEvents *events)
+size_t serialize_game_events(uint8_t *buffer, uint32_t frame, uint32_t client_index, const GameEvents *events)
 {
     size_t offset = 0;
 
     MessageHeader header = {
-        .type = MSG_P2S_PLAYER_EVENTS,
+        .type = MSG_P2S_GAME_EVENTS,
         .frame = htonl(frame),
         .payload_size = htons(sizeof(PlayerEventsPayload)),
     };
@@ -18,8 +18,8 @@ size_t serialize_player_events(uint8_t *buffer, uint32_t frame, uint32_t player_
     offset += sizeof(header);
 
     PlayerEventsPayload payload = {
-        .player_id = htonl(player_id),
-        .input = events->player_inputs[player_id],
+        .client_index = htonl(client_index),
+        .input = events->player_inputs[client_index],
     };
     memcpy(buffer + offset, &payload, sizeof(payload));
     offset += sizeof(payload);
@@ -27,7 +27,7 @@ size_t serialize_player_events(uint8_t *buffer, uint32_t frame, uint32_t player_
     return offset;
 }
 
-void deserialize_player_events(const uint8_t *buffer, size_t size, uint32_t *out_frame, uint32_t *out_player_id, PlayerInput *out_input)
+void deserialize_game_events(const uint8_t *buffer, size_t size, uint32_t *out_frame, uint32_t *out_client_index, PlayerInput *out_input)
 {
     assert(size >= sizeof(MessageHeader) + sizeof(PlayerEventsPayload));
 
@@ -36,24 +36,24 @@ void deserialize_player_events(const uint8_t *buffer, size_t size, uint32_t *out
     MessageHeader header;
     memcpy(&header, buffer + offset, sizeof(header));
     offset += sizeof(header);
-    assert(header.type == MSG_P2S_PLAYER_EVENTS);
+    assert(header.type == MSG_P2S_GAME_EVENTS);
 
     PlayerEventsPayload payload;
     memcpy(&payload, buffer + offset, sizeof(payload));
 
     *out_frame = ntohl(header.frame);
-    *out_player_id = ntohl(payload.player_id);
+    *out_client_index = ntohl(payload.client_index);
     *out_input = payload.input;
 }
 
-// MSG_S2P_FRAME_EVENTS
+// MSG_S2P_GAME_EVENTS
 
 size_t serialize_frame_events(uint8_t *buffer, uint32_t frame, const GameEvents *events)
 {
     size_t offset = 0;
 
     MessageHeader header = {
-        .type = MSG_S2P_FRAME_EVENTS,
+        .type = MSG_S2P_GAME_EVENTS,
         .frame = htonl(frame),
         .payload_size = htons(sizeof(FrameEventsPayload)),
     };
@@ -77,7 +77,7 @@ void deserialize_frame_events(const uint8_t *buffer, size_t size, uint32_t *out_
     MessageHeader header;
     memcpy(&header, buffer + offset, sizeof(header));
     offset += sizeof(header);
-    assert(header.type == MSG_S2P_FRAME_EVENTS);
+    assert(header.type == MSG_S2P_GAME_EVENTS);
 
     FrameEventsPayload payload;
     memcpy(&payload, buffer + offset, sizeof(payload));
@@ -86,14 +86,14 @@ void deserialize_frame_events(const uint8_t *buffer, size_t size, uint32_t *out_
     memcpy(out_events->player_inputs, payload.player_inputs, sizeof(payload.player_inputs));
 }
 
-// MSG_S2P_ASSIGN_ID
+// MSG_S2P_INIT_PLAYER
 
-size_t serialize_assign_id(uint8_t *buffer, uint32_t player_id)
+size_t serialize_init_player(uint8_t *buffer, uint32_t client_index)
 {
     size_t offset = 0;
 
     MessageHeader header = {
-        .type = MSG_S2P_ASSIGN_ID,
+        .type = MSG_S2P_INIT_PLAYER,
         .frame = 0,
         .payload_size = htons(sizeof(AssignIdPayload)),
     };
@@ -101,14 +101,14 @@ size_t serialize_assign_id(uint8_t *buffer, uint32_t player_id)
     offset += sizeof(header);
 
     AssignIdPayload payload = {
-        .assigned_player_id = htonl(player_id)};
+        .assigned_client_index = htonl(client_index)};
     memcpy(buffer + offset, &payload, sizeof(payload));
     offset += sizeof(payload);
 
     return offset;
 }
 
-void deserialize_assign_id(const uint8_t *buffer, size_t size, uint32_t *out_player_id)
+void deserialize_init_player(const uint8_t *buffer, size_t size, uint32_t *out_client_index)
 {
     assert(size >= sizeof(MessageHeader) + sizeof(AssignIdPayload));
 
@@ -117,71 +117,10 @@ void deserialize_assign_id(const uint8_t *buffer, size_t size, uint32_t *out_pla
     MessageHeader header;
     memcpy(&header, buffer + offset, sizeof(header));
     offset += sizeof(header);
-    assert(header.type == MSG_S2P_ASSIGN_ID);
+    assert(header.type == MSG_S2P_INIT_PLAYER);
 
     AssignIdPayload payload;
     memcpy(&payload, buffer + offset, sizeof(payload));
 
-    *out_player_id = ntohl(payload.assigned_player_id);
-}
-
-// MSG_SB_PLAYER_JOINED / MSG_SB_PLAYER_LEFT
-
-size_t serialize_player_joined(uint8_t *buffer, uint32_t player_id)
-{
-    size_t offset = 0;
-
-    MessageHeader header = {
-        .type = MSG_SB_PLAYER_JOINED,
-        .frame = 0,
-        .payload_size = htons(sizeof(PlayerJoinedLeftPayload)),
-    };
-    memcpy(buffer + offset, &header, sizeof(header));
-    offset += sizeof(header);
-
-    PlayerJoinedLeftPayload payload = {
-        .player_id = htonl(player_id),
-    };
-    memcpy(buffer + offset, &payload, sizeof(payload));
-    offset += sizeof(payload);
-
-    return offset;
-}
-
-size_t serialize_player_left(uint8_t *buffer, uint32_t player_id)
-{
-    size_t offset = 0;
-
-    MessageHeader header = {
-        .type = MSG_SB_PLAYER_LEFT,
-        .frame = 0,
-        .payload_size = htons(sizeof(PlayerJoinedLeftPayload)),
-    };
-    memcpy(buffer + offset, &header, sizeof(header));
-    offset += sizeof(header);
-
-    PlayerJoinedLeftPayload payload = {
-        .player_id = htonl(player_id),
-    };
-    memcpy(buffer + offset, &payload, sizeof(payload));
-    offset += sizeof(payload);
-
-    return offset;
-}
-
-void deserialize_player_joined_left(const uint8_t *buffer, size_t size, MessageType expected_type, uint32_t *out_player_id)
-{
-    assert(size >= sizeof(MessageHeader) + sizeof(PlayerJoinedLeftPayload));
-
-    size_t offset = 0;
-
-    MessageHeader header;
-    memcpy(&header, buffer + offset, sizeof(header));
-    offset += sizeof(header);
-    assert(header.type == expected_type);
-
-    PlayerJoinedLeftPayload payload;
-    memcpy(&payload, buffer + offset, sizeof(payload));
-
-    *out_player_id = ntohl(payload.player_id);
+    *out_client_index = ntohl(payload.assigned_client_index);
 }

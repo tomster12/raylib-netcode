@@ -239,23 +239,18 @@ void *game_server_client_thread(void *arg)
     ClientData *client_data = &server->client_data[client_index];
     free(args);
 
-    // Send player MSG_S2P_ASSIGN_ID to initialise them
+    // Send player MSG_S2P_INIT_PLAYER to initialise them
     uint8_t msg_buffer[MAX_MESSAGE_SIZE];
-    size_t msg_size = serialize_assign_id(msg_buffer, client_index);
+    size_t msg_size = serialize_init_player(msg_buffer, client_index);
     ssize_t sent = send(client_data->fd, msg_buffer, msg_size, 0);
     if (sent < 0)
     {
-        printf("Failed to send MSG_S2P_ASSIGN_ID to client %d\n", client_index);
+        printf("Failed to send MSG_S2P_INIT_PLAYER to client %d\n", client_index);
         goto cleanup;
     }
-    printf("Sent MSG_S2P_ASSIGN_ID to player %u\n", client_index);
+    printf("Sent MSG_S2P_INIT_PLAYER to player %u\n", client_index);
 
-    // Broadcast MSG_SB_PLAYER_JOINED to all other clients
-    msg_size = serialize_player_joined(msg_buffer, client_index);
-    sent = game_server_broadcast(server, msg_buffer, msg_size, client_data->fd);
-    printf("Broadcasted MSG_SB_PLAYER_JOINED for player %u\n", client_index);
-
-    // Update local state with the player join
+    // Update local player events with the player join
     pthread_mutex_lock(&server->state_lock);
     {
         GameState *current_state = &server->game_states[server->server_frame % FRAME_BUFFER_SIZE];
@@ -271,13 +266,13 @@ void *game_server_client_thread(void *arg)
         ssize_t received = recv(client_data->fd, buffer, sizeof(buffer), 0);
         if (received <= 0) break;
 
-        // Assume that it is a MSG_P2S_PLAYER_EVENTS
+        // Assume that it is a MSG_P2S_GAME_EVENTS
         uint32_t client_frame;
         uint32_t recv_index;
         PlayerInput input;
-        deserialize_player_events(buffer, received, &client_frame, &recv_index, &input);
+        deserialize_game_events(buffer, received, &client_frame, &recv_index, &input);
         assert(recv_index == client_index);
-        printf("Received MSG_P2S_PLAYER_EVENTS for frame %u from player %u\n", client_frame, client_index);
+        printf("Received MSG_P2S_GAME_EVENTS for frame %u from player %u\n", client_frame, client_index);
 
         // Lock client and state while we handle storing the clients frame
         pthread_mutex_lock(&server->state_lock);
@@ -375,24 +370,22 @@ void *game_simulation_thread(void *arg)
             }
 
             // Simulate just the next server frame with all clients events
-            uint32_t server_frame = server->server_frame;
-            uint32_t next_server_frame = server_frame + 1;
-            GameState *current_state = &server->game_states[server_frame % FRAME_BUFFER_SIZE];
-            GameEvents *current_events = &server->game_events[server_frame % FRAME_BUFFER_SIZE];
-            GameState *next_state = &server->game_states[next_server_frame % FRAME_BUFFER_SIZE];
+            GameState *current_state = &server->game_states[server->server_frame % FRAME_BUFFER_SIZE];
+            GameEvents *current_events = &server->game_events[server->server_frame % FRAME_BUFFER_SIZE];
+            GameState *next_state = &server->game_states[(server->server_frame + 1) % FRAME_BUFFER_SIZE];
 
-            printf("Server simulating frame %u\n", server_frame);
+            printf("Server simulating frame %u\n", server->server_frame);
             game_simulate(current_state, current_events, next_state);
-            server->server_frame = next_server_frame;
+            server->server_frame++;
 
-            // Broadcast out final confirmed server frames to all clients
+            // Broadcast out final confirmed events to all clients
             uint8_t buffer[MAX_MESSAGE_SIZE];
-            size_t msg_size = serialize_frame_events(buffer, server_frame, current_events);
+            size_t msg_size = serialize_frame_events(buffer, server->server_frame, current_events);
             ssize_t sent = game_server_broadcast(server, buffer, msg_size, -1);
-            printf("Broadcasted MSG_S2P_FRAME_EVENTS for frame %d\n", server_frame);
+            printf("Broadcasted MSG_S2P_GAME_EVENTS for frame %d\n", server->server_frame);
 
             // Reset events for this frame for when we rollback around
-            memset(&server->game_events[next_server_frame % FRAME_BUFFER_SIZE], 0, sizeof(GameEvents));
+            memset(&server->game_events[(server->server_frame + 1) % FRAME_BUFFER_SIZE], 0, sizeof(GameEvents));
         }
         pthread_mutex_unlock(&server->state_lock);
     }

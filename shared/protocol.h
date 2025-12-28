@@ -2,11 +2,9 @@
 
 typedef enum
 {
-    MSG_P2S_PLAYER_EVENTS = 1,
-    MSG_S2P_FRAME_EVENTS,
-    MSG_SB_PLAYER_JOINED,
-    MSG_SB_PLAYER_LEFT,
-    MSG_S2P_ASSIGN_ID,
+    MSG_P2S_GAME_EVENTS = 1,
+    MSG_S2P_GAME_EVENTS,
+    MSG_S2P_INIT_PLAYER,
 } MessageType;
 
 typedef struct
@@ -18,7 +16,7 @@ typedef struct
 
 typedef struct
 {
-    uint32_t player_id;
+    uint32_t client_index;
     PlayerInput input;
 } __attribute__((packed)) PlayerEventsPayload;
 
@@ -29,23 +27,23 @@ typedef struct
 
 typedef struct
 {
-    uint32_t assigned_player_id;
+    uint32_t assigned_client_index;
 } __attribute__((packed)) AssignIdPayload;
 
 typedef struct
 {
-    uint32_t player_id;
+    uint32_t client_index;
 } __attribute__((packed)) PlayerJoinedLeftPayload;
 
-size_t serialize_player_events(uint8_t *buffer, uint32_t frame, uint32_t player_id, const GameEvents *events);
-void deserialize_player_events(const uint8_t *buffer, size_t size, uint32_t *out_frame, uint32_t *out_player_id, PlayerInput *out_input);
+size_t serialize_game_events(uint8_t *buffer, uint32_t frame, uint32_t client_index, const GameEvents *events);
+void deserialize_game_events(const uint8_t *buffer, size_t size, uint32_t *out_frame, uint32_t *out_client_index, PlayerInput *out_input);
 
 size_t serialize_frame_events(uint8_t *buffer, uint32_t frame, const GameEvents *events);
 void deserialize_frame_events(const uint8_t *buffer, size_t size, uint32_t *out_frame, GameEvents *out_events);
 
-size_t serialize_assign_id(uint8_t *buffer, uint32_t player_id);
-void deserialize_assign_id(const uint8_t *buffer, size_t size, uint32_t *out_player_id);
+size_t serialize_init_player(uint8_t *buffer, uint32_t client_index);
+void deserialize_init_player(const uint8_t *buffer, size_t size, uint32_t *out_client_index);
 
-size_t serialize_player_joined(uint8_t *buffer, uint32_t player_id);
-size_t serialize_player_left(uint8_t *buffer, uint32_t player_id);
-void deserialize_player_joined_left(const uint8_t *buffer, size_t size, MessageType expected_type, uint32_t *out_player_id);
+size_t serialize_player_joined(uint8_t *buffer, uint32_t client_index);
+size_t serialize_player_left(uint8_t *buffer, uint32_t client_index);
+void deserialize_player_joined_left(const uint8_t *buffer, size_t size, MessageType expected_type, uint32_t *out_client_index);

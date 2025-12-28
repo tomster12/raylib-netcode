@@ -16,7 +16,7 @@ typedef struct
     pthread_t recv_thread;
     pthread_mutex_t state_lock;
 
-    uint32_t client_player_id;
+    uint32_t client_index;
     uint32_t sync_frame;
     uint32_t server_frame;
     uint32_t client_frame;
@@ -30,4 +30,4 @@ void *game_client_recv_thread(void *arg);
 
 void game_client_handle_payload(GameClient *client, MessageHeader *header, char *buf, size_t n);
 void game_client_reconcile_frames(GameClient *client);
-void game_client_send_server_events(GameClient *client, uint32_t frame);
+void game_client_send_game_events(GameClient *client, uint32_t frame);

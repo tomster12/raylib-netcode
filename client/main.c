@@ -54,10 +54,7 @@ int main()
 
     while (!WindowShouldClose() && !to_shutdown_app && atomic_load(&client.is_connected))
     {
-        if (!atomic_load_explicit(&client.is_initialised, memory_order_acquire))
-        {
-            continue;
-        }
+        if (!atomic_load_explicit(&client.is_initialised, memory_order_acquire)) continue;
 
         pthread_mutex_lock(&client.state_lock);
         {
@@ -70,26 +67,24 @@ int main()
                 continue;
             }
 
-            // Read in local events and simulate another frame forward
+            // Read in local events and simulate another frame
             GameState *current_state = &client.states[client.client_frame % FRAME_BUFFER_SIZE];
             GameEvents *current_events = &client.events[client.client_frame % FRAME_BUFFER_SIZE];
             GameState *next_state = &client.states[(client.client_frame + 1) % FRAME_BUFFER_SIZE];
 
             printf("Client simulating frame %u\n", client.client_frame);
-
             memset(current_events, 0, sizeof(GameEvents));
-            game_handle_events(current_state, current_events, client.client_player_id);
+            game_handle_events(current_state, current_events, client.client_index);
             game_simulate(current_state, current_events, next_state);
-
             client.client_frame++;
 
             // Send the local events to the server
-            game_client_send_server_events(&client, client.client_frame - 1);
+            game_client_send_game_events(&client, client.client_frame - 1);
 
             // Render the new generated frame
             BeginDrawing();
             ClearBackground(RAYWHITE);
-            game_render(next_state, client.client_player_id);
+            game_render(next_state, client.client_index);
             DrawFPS(10, 10);
             EndDrawing();
         }
