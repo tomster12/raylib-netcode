@@ -10,7 +10,7 @@ typedef struct
 {
     bool is_connected;
     int fd;
-    int index;
+    uint32_t index;
     pthread_t thread_id;
     uint32_t client_frame;
 } ClientData;
@@ -36,7 +36,7 @@ typedef struct
 typedef struct
 {
     GameServer *server;
-    int index;
+    uint32_t index;
 } ClientThreadArgs;
 
 int game_server_init(GameServer *server, int port);

@@ -1,5 +1,5 @@
 // cbuild: -I../ -g
-// cbuild: gameserver.c ../shared/gameimpl.c ../shared/protocol.c
+// cbuild: gameserver.c ../shared/gameimpl.c ../shared/protocol.c ../shared/log.c
 
 #include "gameserver.h"
 #include "shared/gameimpl.h"

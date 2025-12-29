@@ -1,7 +1,8 @@
 #include "gameserver.h"
-#include "shared/gameimpl.h"
-#include "shared/globals.h"
-#include "shared/protocol.h"
+#include "../shared/gameimpl.h"
+#include "../shared/globals.h"
+#include "../shared/protocol.h"
+#include "../shared/log.h"
 #include <arpa/inet.h>
 #include <assert.h>
 #include <netinet/in.h>
@@ -173,7 +174,7 @@ void *game_server_accept_thread(void *arg)
 
             // Find first available slot
             ClientData *client_data = NULL;
-            int client_index = -1;
+            uint32_t client_index = -1;
             for (int i = 0; i < MAX_CLIENTS; ++i)
             {
                 if (!server->client_data[i].is_connected)
@@ -230,13 +231,29 @@ void *game_server_client_thread(void *arg)
 {
     ClientThreadArgs *args = (ClientThreadArgs *)arg;
     GameServer *server = args->server;
-    int client_index = args->index;
+    uint32_t client_index = args->index;
     ClientData *client_data = &server->client_data[client_index];
     free(args);
 
-    // Initialise player with MSG_S2P_INIT_PLAYER
+    // ------------------ Initialisation ------------------
+
     uint8_t msg_buffer[MAX_MESSAGE_SIZE];
-    size_t msg_size = serialize_init_player(msg_buffer, client_index);
+    size_t msg_size;
+
+    pthread_mutex_lock(&server->state_lock);
+    {
+        GameEvents *current_events = &server->game_events[server->server_frame % FRAME_BUFFER_SIZE];
+        GameState *current_state = &server->game_states[server->server_frame % FRAME_BUFFER_SIZE];
+
+        // Update server events with the new player
+        current_events->player_events[client_index] = PLAYER_EVENT_JOIN;
+
+        // Serialise initialisation payload
+        msg_size = serialize_init_player(msg_buffer, current_state, current_events, client_index);
+    }
+    pthread_mutex_unlock(&server->state_lock);
+
+    // Send the initialisation payload
     ssize_t sent = send(client_data->fd, msg_buffer, msg_size, 0);
     if (sent < 0)
     {
@@ -244,31 +261,29 @@ void *game_server_client_thread(void *arg)
         goto cleanup;
     }
 
-    printf("Sent MSG_S2P_INIT_PLAYER to player %u\n", client_index);
+    log_timestamp();
+    printf("Sent MSG_S2P_INIT_PLAYER to client %u\n", client_index);
 
-    // Update local player events with PLAYER_EVENT_JOIN
-    pthread_mutex_lock(&server->state_lock);
-    {
-        GameEvents *current_events = &server->game_events[server->server_frame % FRAME_BUFFER_SIZE];
-        current_events->player_events[client_index] = PLAYER_EVENT_JOIN;
-    }
-    pthread_mutex_unlock(&server->state_lock);
+    // ------------------ Listening ------------------
 
     // Listen and wait for client input
     uint8_t buffer[MAX_MESSAGE_SIZE];
     while (&client_data->is_connected && !atomic_load(&server->to_shutdown))
     {
         // TODO: TCP receive into a receive buffer
-        ssize_t received = recv(client_data->fd, buffer, sizeof(buffer), 0);
-        if (received <= 0) break;
+        ssize_t message_size = recv(client_data->fd, buffer, sizeof(buffer), 0);
+        if (message_size <= 0) break;
 
-        // Assume that it is a MSG_P2S_GAME_EVENTS
-        uint32_t client_frame;
+        // --------- Handle MSG_P2S_GAME_EVENTS ---------
+
+        uint32_t frame;
         uint32_t recv_index;
         PlayerInput input;
-        deserialize_game_events(buffer, received, &client_frame, &recv_index, &input);
+        deserialize_p2s_game_events(buffer, message_size, &frame, &recv_index, &input);
         assert(recv_index == client_index);
-        printf("Received MSG_P2S_GAME_EVENTS for frame %u from player %u\n", client_frame, client_index);
+
+        log_timestamp();
+        printf("Received MSG_P2S_GAME_EVENTS for frame %u from player %u\n", frame, client_index);
 
         // Lock client and state while we handle storing the clients frame
         pthread_mutex_lock(&server->state_lock);
@@ -276,27 +291,27 @@ void *game_server_client_thread(void *arg)
             pthread_mutex_lock(&server->clients_lock);
             {
                 // Error if client is behind the server
-                if (client_frame < server->server_frame)
+                if (frame < server->server_frame)
                 {
-                    printf("WARN: Client frame %u is behind the server frame %u, IGNORING DATA", client_frame, server->server_frame);
+                    printf("WARN: Client frame %u is behind the server frame %u, IGNORING DATA", frame, server->server_frame);
                     pthread_mutex_unlock(&server->clients_lock);
                     pthread_mutex_unlock(&server->state_lock);
                     continue;
                 }
 
                 // Error if client is too far ahead of server
-                if (client_frame >= server->server_frame + FRAME_BUFFER_SIZE)
+                if (frame >= server->server_frame + FRAME_BUFFER_SIZE)
                 {
-                    printf("WARN: Client frame %u further than buffer size %d from server frame %u, IGNORING DATA", client_frame, FRAME_BUFFER_SIZE, server->server_frame);
+                    printf("WARN: Client frame %u further than buffer size %d from server frame %u, IGNORING DATA", frame, FRAME_BUFFER_SIZE, server->server_frame);
                     pthread_mutex_unlock(&server->clients_lock);
                     pthread_mutex_unlock(&server->state_lock);
                     continue;
                 }
 
                 // Write the clients frame data
-                GameEvents *events = &server->game_events[client_frame % FRAME_BUFFER_SIZE];
+                GameEvents *events = &server->game_events[frame % FRAME_BUFFER_SIZE];
                 events->player_inputs[client_index] = input;
-                client_data->client_frame = client_frame;
+                client_data->client_frame = frame;
             }
             pthread_mutex_unlock(&server->clients_lock);
 
@@ -364,14 +379,18 @@ void *game_simulation_thread(void *arg)
             GameEvents *current_events = &server->game_events[server->server_frame % FRAME_BUFFER_SIZE];
             GameState *next_state = &server->game_states[(server->server_frame + 1) % FRAME_BUFFER_SIZE];
 
+            log_timestamp();
             printf("Server simulating frame %u\n", server->server_frame);
+
             game_simulate(current_state, current_events, next_state);
             server->server_frame++;
 
             // Broadcast out final confirmed events to all clients
             uint8_t buffer[MAX_MESSAGE_SIZE];
-            size_t msg_size = serialize_frame_events(buffer, server->server_frame, current_events);
+            size_t msg_size = serialize_s2p_game_events(buffer, server->server_frame, current_events);
             ssize_t sent = game_server_broadcast(server, buffer, msg_size, -1);
+
+            log_timestamp();
             printf("Broadcasted MSG_S2P_GAME_EVENTS for frame %d\n", server->server_frame);
 
             // Reset events for this frame for when we rollback around

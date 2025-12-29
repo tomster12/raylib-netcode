@@ -16,34 +16,27 @@ typedef struct
 
 typedef struct
 {
+    GameState state;
+    GameEvents events;
+    uint32_t client_index;
+} __attribute__((packed)) InitPlayerPayload;
+
+size_t serialize_init_player(uint8_t *buffer, const GameState *state, const GameEvents *events, uint32_t client_index);
+void deserialize_init_player(const uint8_t *buffer, size_t message_size, uint32_t *out_frame, GameState *out_state, GameEvents *out_events, uint32_t *out_client_index);
+
+typedef struct
+{
     uint32_t client_index;
     PlayerInput input;
-} __attribute__((packed)) PlayerEventsPayload;
+} __attribute__((packed)) P2SGameEventsPayload;
+
+size_t serialize_p2s_game_events(uint8_t *buffer, uint32_t frame, uint32_t client_index, const GameEvents *events);
+void deserialize_p2s_game_events(const uint8_t *buffer, size_t message_size, uint32_t *out_frame, uint32_t *out_client_index, PlayerInput *out_input);
 
 typedef struct
 {
     PlayerInput player_inputs[MAX_CLIENTS];
-} __attribute__((packed)) FrameEventsPayload;
+} __attribute__((packed)) S2PGameEventsPayload;
 
-typedef struct
-{
-    uint32_t assigned_client_index;
-} __attribute__((packed)) AssignIdPayload;
-
-typedef struct
-{
-    uint32_t client_index;
-} __attribute__((packed)) PlayerJoinedLeftPayload;
-
-size_t serialize_game_events(uint8_t *buffer, uint32_t frame, uint32_t client_index, const GameEvents *events);
-void deserialize_game_events(const uint8_t *buffer, size_t size, uint32_t *out_frame, uint32_t *out_client_index, PlayerInput *out_input);
-
-size_t serialize_frame_events(uint8_t *buffer, uint32_t frame, const GameEvents *events);
-void deserialize_frame_events(const uint8_t *buffer, size_t size, uint32_t *out_frame, GameEvents *out_events);
-
-size_t serialize_init_player(uint8_t *buffer, uint32_t client_index);
-void deserialize_init_player(const uint8_t *buffer, size_t size, uint32_t *out_client_index);
-
-size_t serialize_player_joined(uint8_t *buffer, uint32_t client_index);
-size_t serialize_player_left(uint8_t *buffer, uint32_t client_index);
-void deserialize_player_joined_left(const uint8_t *buffer, size_t size, MessageType expected_type, uint32_t *out_client_index);
+size_t serialize_s2p_game_events(uint8_t *buffer, uint32_t frame, const GameEvents *events);
+void deserialize_s2p_game_events(const uint8_t *buffer, size_t message_size, uint32_t *out_frame, GameEvents *out_events);

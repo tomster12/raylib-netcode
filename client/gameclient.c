@@ -1,4 +1,5 @@
 #include "gameclient.h"
+#include "../shared/log.h"
 #include <arpa/inet.h>
 #include <assert.h>
 #include <errno.h>
@@ -57,7 +58,7 @@ int game_client_init(GameClient *client, const char *server_ip, int port)
         return 1;
     }
 
-    printf("Game client connected to %s:%d (fd=%d, listen=%lu)\n", server_ip, port, client->socket_fd, client->recv_thread);
+    printf("Game client connected to %s:%d (fd=%d, listen=%lu)\n\n", server_ip, port, client->socket_fd, client->recv_thread);
     atomic_store(&client->is_connected, true);
     return 0;
 }
@@ -94,15 +95,21 @@ void *game_client_recv_thread(void *arg)
     uint8_t buffer[MAX_MESSAGE_SIZE];
     while (!atomic_load(&client->to_shutdown))
     {
-        ssize_t received = recv(client->socket_fd, buffer, sizeof(buffer), 0);
-        if (received <= 0) break;
+        ssize_t message_size = recv(client->socket_fd, buffer, sizeof(buffer), 0);
+        if (message_size <= 0) break;
 
-        // Read in the message header then switch on message type
+        // Peek and parse just the header so we can switch on the type
+        // We make the assumption at this point 1 TCP recv = 1 game message
+        assert(message_size >= sizeof(MessageHeader));
+
         MessageHeader header;
-        assert(received >= sizeof(MessageHeader));
         memcpy(&header, buffer, sizeof(header));
 
-        game_client_handle_payload(client, &header, buffer, (size_t)received);
+        uint16_t payload_size = ntohs(header.payload_size);
+        assert(message_size == (sizeof(header) + payload_size));
+
+        // Now hand this over to be handled
+        game_client_handle_payload(client, &header, buffer, (size_t)message_size);
     }
 
     atomic_store(&client->is_connected, false);
@@ -110,28 +117,30 @@ void *game_client_recv_thread(void *arg)
     return NULL;
 }
 
-void game_client_handle_payload(GameClient *client, MessageHeader *header, char *buf, size_t n)
+void game_client_handle_payload(GameClient *client, MessageHeader *header, char *buffer, size_t message_size)
 {
     switch (header->type)
     {
     case MSG_S2P_INIT_PLAYER:
     {
+        uint32_t frame;
         uint32_t client_index;
-        deserialize_init_player((uint8_t *)buf, n, &client_index);
+        GameState current_state;
+        GameEvents current_events;
+        deserialize_init_player((uint8_t *)buffer, message_size, &frame, &current_state, &current_events, &client_index);
+        
+        log_timestamp();
         printf("Received MSG_S2P_INIT_PLAYER as player %u\n", client_index);
 
-        // Initialize frame 0 with the PLAYER_EVENT_JOIN event
+        // Initialize player with the given frame, events, state
         pthread_mutex_lock(&client->state_lock);
         {
-            GameState *initial_state = &client->states[0];
-            memset(initial_state, 0, sizeof(GameState));
-
             client->client_index = client_index;
-            client->sync_frame = 0;
-            client->server_frame = 0;
-            client->client_frame = 0;
-
-            client->events[client->client_frame % FRAME_BUFFER_SIZE].player_events[client->client_index] = PLAYER_EVENT_JOIN;
+            client->sync_frame = header->frame;
+            client->server_frame = header->frame;
+            client->client_frame = header->frame;
+            client->states[client->sync_frame % FRAME_BUFFER_SIZE] = current_state;
+            client->events[client->sync_frame % FRAME_BUFFER_SIZE] = current_events;
         }
         pthread_mutex_unlock(&client->state_lock);
 
@@ -141,24 +150,25 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
 
     case MSG_S2P_GAME_EVENTS:
     {
-        uint32_t server_frame;
+        uint32_t frame;
         GameEvents server_frame_events;
-        deserialize_frame_events((uint8_t *)buf, n, &server_frame, &server_frame_events);
-        printf("Received MSG_S2P_GAME_EVENTS for frame %u\n", server_frame);
+        deserialize_s2p_game_events((uint8_t *)buffer, message_size, &frame, &server_frame_events);
+        
+        log_timestamp();
+        printf("Received MSG_S2P_GAME_EVENTS for frame %u\n", frame);
 
         pthread_mutex_lock(&client->state_lock);
         {
-            if (server_frame != client->server_frame + 1)
+            if (frame != client->server_frame + 1)
             {
-                printf("Server frame %u unexpected, expected %d\n", server_frame, client->server_frame + 1);
+                printf("Server frame %u unexpected, expected %d\n", frame, client->server_frame + 1);
                 pthread_mutex_unlock(&client->state_lock);
                 break;
             }
 
             // Copy events into the game client for server frame
-            GameEvents *frame_events = &client->events[server_frame % FRAME_BUFFER_SIZE];
-            *frame_events = server_frame_events;
-            client->server_frame = server_frame;
+            client->server_frame = frame;
+            client->events[frame % FRAME_BUFFER_SIZE] = server_frame_events;
 
             game_client_reconcile_frames(client);
         }
@@ -182,7 +192,7 @@ void game_client_send_game_events(GameClient *client, uint32_t frame, GameEvents
 {
     // Serialize and send to server
     uint8_t buffer[MAX_MESSAGE_SIZE];
-    size_t msg_size = serialize_game_events(
+    size_t msg_size = serialize_p2s_game_events(
         buffer,
         frame,
         client->client_index,
@@ -196,5 +206,6 @@ void game_client_send_game_events(GameClient *client, uint32_t frame, GameEvents
         return;
     }
 
+    log_timestamp();
     printf("Sent MSG_P2S_GAME_EVENTS for frame %u\n", frame);
 }
