@@ -8,18 +8,18 @@ void game_simulate(const GameState *current, const GameEvents *events, GameState
     uint32_t active_players = 0;
     for (size_t i = 0; i < MAX_CLIENTS; ++i)
     {
+        const PlayerEvent *player_event = &events->player_events[i];
+        const PlayerInput *player_input = &events->player_inputs[i];
         PlayerData *player_data = &out->player_data[i];
-        PlayerEvent *player_event = &events->player_events[i];
-        PlayerInput *player_input = &events->player_inputs[i];
 
         // Handle events
-        if (player_event == PLAYER_EVENT_JOIN)
+        if (*player_event == PLAYER_EVENT_JOIN)
         {
             player_data->active = true;
             player_data->x = 400.0f;
             player_data->y = 400.0f;
         }
-        if (player_event == PLAYER_EVENT_LEAVE)
+        if (*player_event == PLAYER_EVENT_LEAVE)
         {
             player_data->active = false;
         }

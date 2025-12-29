@@ -56,6 +56,9 @@ int main()
     {
         if (!atomic_load_explicit(&client.is_initialised, memory_order_acquire)) continue;
 
+        // Do the main simulation in a tight lock to allow receiving data
+        GameState next_state_copy;
+        GameEvents current_events_copy;
         pthread_mutex_lock(&client.state_lock);
         {
             // Error state if client is too far ahead of server
@@ -75,20 +78,25 @@ int main()
             printf("Client simulating frame %u\n", client.client_frame);
             memset(current_events, 0, sizeof(GameEvents));
             game_handle_events(current_state, current_events, client.client_index);
+
             game_simulate(current_state, current_events, next_state);
             client.client_frame++;
 
-            // Send the local events to the server
-            game_client_send_game_events(&client, client.client_frame - 1);
-
-            // Render the new generated frame
-            BeginDrawing();
-            ClearBackground(RAYWHITE);
-            game_render(next_state, client.client_index);
-            DrawFPS(10, 10);
-            EndDrawing();
+            // Copy immutable state and events
+            next_state_copy = *next_state;
+            current_events_copy = *current_events;
         }
         pthread_mutex_unlock(&client.state_lock);
+
+        // Send the local events to the server
+        game_client_send_game_events(&client, client.client_frame - 1, &current_events_copy);
+
+        // Render the new generated frame
+        BeginDrawing();
+        ClearBackground(RAYWHITE);
+        game_render(&next_state_copy, client.client_index);
+        DrawFPS(10, 10);
+        EndDrawing();
     }
 
     printf("\nShutting down the game client\n");

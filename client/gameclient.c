@@ -120,7 +120,7 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
         deserialize_init_player((uint8_t *)buf, n, &client_index);
         printf("Received MSG_S2P_INIT_PLAYER as player %u\n", client_index);
 
-        // Initialize frame 0 with the player join
+        // Initialize frame 0 with the PLAYER_EVENT_JOIN event
         pthread_mutex_lock(&client->state_lock);
         {
             GameState *initial_state = &client->states[0];
@@ -131,7 +131,7 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
             client->server_frame = 0;
             client->client_frame = 0;
 
-            client->events[client->client_frame].player_events[client->client_index] = PLAYER_EVENT_JOIN;
+            client->events[client->client_frame % FRAME_BUFFER_SIZE].player_events[client->client_index] = PLAYER_EVENT_JOIN;
         }
         pthread_mutex_unlock(&client->state_lock);
 
@@ -178,11 +178,9 @@ void game_client_reconcile_frames(GameClient *client)
     // Then from server_frame -> client_frame with local data
 }
 
-void game_client_send_game_events(GameClient *client, uint32_t frame)
+void game_client_send_game_events(GameClient *client, uint32_t frame, GameEvents *events)
 {
     // Serialize and send to server
-    GameEvents *events = &client->events[frame % FRAME_BUFFER_SIZE];
-
     uint8_t buffer[MAX_MESSAGE_SIZE];
     size_t msg_size = serialize_game_events(
         buffer,

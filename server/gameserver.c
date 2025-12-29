@@ -87,7 +87,6 @@ void game_server_shutdown(GameServer *server)
     // Signal shutdown, close server socket, close client sockets, and signal conditions
     // This should cause each of the threads to exit out
     atomic_store(&server->to_shutdown, true);
-
     if (server->socket_fd > 0)
     {
         printf("Closing server socket\n");
@@ -95,7 +94,6 @@ void game_server_shutdown(GameServer *server)
         close(server->socket_fd);
         server->socket_fd = -1;
     }
-
     if (server->client_count > 0)
     {
         for (int i = 0; i < MAX_CLIENTS; ++i)
@@ -116,13 +114,11 @@ void game_server_shutdown(GameServer *server)
         printf("Waiting for simulation loop\n");
         pthread_join(server->simulation_thread, NULL);
     }
-
     if (server->client_accept_thread)
     {
         printf("Waiting for client accept loop\n");
         pthread_join(server->client_accept_thread, NULL);
     }
-
     if (server->client_count > 0)
     {
         for (int i = 0; i < MAX_CLIENTS; ++i)
@@ -138,7 +134,6 @@ void game_server_shutdown(GameServer *server)
     }
 
     // Finally cleanup open client sockets
-
     pthread_mutex_destroy(&server->clients_lock);
     pthread_mutex_destroy(&server->state_lock);
     pthread_cond_destroy(&server->simulation_loop_cond);
@@ -198,12 +193,12 @@ void *game_server_accept_thread(void *arg)
                 continue;
             }
 
+            // Assign to slot and start client thread
             client_data->is_connected = true;
             client_data->fd = client_fd;
             client_data->index = client_index;
             server->client_count++;
 
-            // Start client thread to handle this connection
             ClientThreadArgs *args = malloc(sizeof(ClientThreadArgs));
             args->server = server;
             args->index = client_index;
@@ -239,7 +234,7 @@ void *game_server_client_thread(void *arg)
     ClientData *client_data = &server->client_data[client_index];
     free(args);
 
-    // Send player MSG_S2P_INIT_PLAYER to initialise them
+    // Initialise player with MSG_S2P_INIT_PLAYER
     uint8_t msg_buffer[MAX_MESSAGE_SIZE];
     size_t msg_size = serialize_init_player(msg_buffer, client_index);
     ssize_t sent = send(client_data->fd, msg_buffer, msg_size, 0);
@@ -248,13 +243,14 @@ void *game_server_client_thread(void *arg)
         printf("Failed to send MSG_S2P_INIT_PLAYER to client %d\n", client_index);
         goto cleanup;
     }
+
     printf("Sent MSG_S2P_INIT_PLAYER to player %u\n", client_index);
 
-    // Update local player events with the player join
+    // Update local player events with PLAYER_EVENT_JOIN
     pthread_mutex_lock(&server->state_lock);
     {
-        GameState *current_state = &server->game_states[server->server_frame % FRAME_BUFFER_SIZE];
-        game_player_join(current_state, client_index);
+        GameEvents *current_events = &server->game_events[server->server_frame % FRAME_BUFFER_SIZE];
+        current_events->player_events[client_index] = PLAYER_EVENT_JOIN;
     }
     pthread_mutex_unlock(&server->state_lock);
 
@@ -314,22 +310,8 @@ void *game_server_client_thread(void *arg)
     }
 
 cleanup:
-    // Client disconnected
     printf("Client disconnecting (thread=%lu fd=%d player=%u)\n",
            client_data->thread_id, client_data->fd, client_index);
-
-    // Remove player from game state
-    pthread_mutex_lock(&server->state_lock);
-    {
-        GameState *current_state = &server->game_states[server->server_frame % FRAME_BUFFER_SIZE];
-        game_player_leave(current_state, client_index);
-    }
-    pthread_mutex_unlock(&server->state_lock);
-
-    // Broadcast player left
-    msg_size = serialize_player_left(msg_buffer, client_index);
-    sent = game_server_broadcast(server, msg_buffer, msg_size, -1);
-    printf("Broadcasted MSG_SB_PLAYER_LEFT for player %u\n", client_index);
 
     // Close client socket
     if (client_data->fd >= 0)
@@ -338,7 +320,15 @@ cleanup:
         client_data->fd = -1;
     }
 
-    // Now we are cleaned up we can remove the client from the list
+    // Remove player from local game state
+    pthread_mutex_lock(&server->state_lock);
+    {
+        GameEvents *current_events = &server->game_events[server->server_frame % FRAME_BUFFER_SIZE];
+        current_events->player_events[client_index] = PLAYER_EVENT_LEAVE;
+    }
+    pthread_mutex_unlock(&server->state_lock);
+
+    // Remove from the client data list
     pthread_mutex_lock(&server->clients_lock);
     {
         atomic_store(&client_data->is_connected, false);
