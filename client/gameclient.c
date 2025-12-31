@@ -58,7 +58,7 @@ int game_client_init(GameClient *client, const char *server_ip, int port)
         return 1;
     }
 
-    log_printf("Game client connected to %s:%d (fd=%d, listen=%lu)\n\n", server_ip, port, client->socket_fd, client->recv_thread);
+    log_printf("Game client connected to %s:%d (fd=%d, listen=%lu)\n", server_ip, port, client->socket_fd, client->recv_thread);
     atomic_store(&client->is_connected, true);
     return 0;
 }
@@ -123,21 +123,22 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
     {
     case MSG_S2P_INIT_PLAYER:
     {
-        uint32_t frame;
-        uint32_t client_index;
+        int frame;
+        int client_index;
         GameState current_state;
         GameEvents current_events;
         deserialize_init_player((uint8_t *)buffer, message_size, &frame, &current_state, &current_events, &client_index);
-        
+
         log_printf("Received MSG_S2P_INIT_PLAYER as player %u\n", client_index);
 
         // Initialize player with the given frame, events, state
         pthread_mutex_lock(&client->state_lock);
         {
+            int frame = ntohl(header->frame);
             client->client_index = client_index;
-            client->sync_frame = header->frame;
-            client->server_frame = header->frame;
-            client->client_frame = header->frame;
+            client->sync_frame = frame;
+            client->server_frame = frame;
+            client->client_frame = frame;
             client->states[client->sync_frame % FRAME_BUFFER_SIZE] = current_state;
             client->events[client->sync_frame % FRAME_BUFFER_SIZE] = current_events;
         }
@@ -147,24 +148,26 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
         break;
     }
 
-    case MSG_S2P_GAME_EVENTS:
+    case MSG_S2P_FRAME_GAME_EVENTS:
     {
-        uint32_t frame;
+        int frame;
         GameEvents server_frame_events;
-        deserialize_s2p_game_events((uint8_t *)buffer, message_size, &frame, &server_frame_events);
-        
-        log_printf("Received MSG_S2P_GAME_EVENTS for frame %u\n", frame);
+        deserialize_s2p_frame_game_events((uint8_t *)buffer, message_size, &frame, &server_frame_events);
+
+        log_printf("Received MSG_S2P_FRAME_GAME_EVENTS for frame %u\n", frame);
 
         pthread_mutex_lock(&client->state_lock);
         {
-            if (frame != client->server_frame + 1)
+            // Expect to receive the servers next frame for now
+            // If server was on frame 0 when we joined it will send that out again
+            if (frame != client->server_frame + 1 && frame != 0)
             {
-                log_printf("Server frame %u unexpected, expected %d\n", frame, client->server_frame + 1);
+                log_printf("WARN: Server frame %u unexpected, expected %d or 0\n", frame, client->server_frame + 1);
                 pthread_mutex_unlock(&client->state_lock);
                 break;
             }
 
-            // Copy events into the game client for server frame
+            // Overwrite local game events with servers
             client->server_frame = frame;
             client->events[frame % FRAME_BUFFER_SIZE] = server_frame_events;
 
@@ -182,19 +185,48 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
 
 void game_client_reconcile_frames(GameClient *client)
 {
+    // EXPECTS state_lock to be locked
+
+    if (client->client_frame > client->server_frame || client->server_frame > client->sync_frame)
+    {
+        log_printf("Reconciling with rollback (sync %d <= server %d <= client %d)\n", client->sync_frame, client->server_frame, client->client_frame);
+    }
+
     // Reconcile from sync_frame -> server_frame with new real data
+    if (client->server_frame > client->sync_frame)
+    {
+        for (int i = client->sync_frame; i < client->server_frame; ++i)
+        {
+            GameState *current_state = &client->states[i % FRAME_BUFFER_SIZE];
+            GameEvents *current_events = &client->events[i % FRAME_BUFFER_SIZE];
+            GameState *next_state = &client->states[(i + 1) % FRAME_BUFFER_SIZE];
+            game_simulate(current_state, current_events, next_state);
+        }
+        client->sync_frame = client->server_frame;
+    }
+
     // Then from server_frame -> client_frame with local data
+    if (client->client_frame > client->server_frame)
+    {
+        for (int i = client->server_frame; i < client->client_frame; ++i)
+        {
+            GameState *current_state = &client->states[i % FRAME_BUFFER_SIZE];
+            GameEvents *current_events = &client->events[i % FRAME_BUFFER_SIZE];
+            GameState *next_state = &client->states[(i + 1) % FRAME_BUFFER_SIZE];
+            game_simulate(current_state, current_events, next_state);
+        }
+    }
 }
 
-void game_client_send_game_events(GameClient *client, uint32_t frame, GameEvents *events)
+void game_client_send_game_events(GameClient *client, int frame, GameEvents *events)
 {
-    // Serialize and send to server
+    // Serialize and send to server the players inputs
     uint8_t buffer[MAX_MESSAGE_SIZE];
-    size_t msg_size = serialize_p2s_game_events(
+    size_t msg_size = serialize_p2s_frame_inputs(
         buffer,
         frame,
         client->client_index,
-        events);
+        &events->player_inputs[client->client_index]);
 
     ssize_t sent = send(client->socket_fd, buffer, msg_size, 0);
     if (sent < 0)
@@ -204,5 +236,5 @@ void game_client_send_game_events(GameClient *client, uint32_t frame, GameEvents
         return;
     }
 
-    log_printf("Sent MSG_P2S_GAME_EVENTS for frame %u\n", frame);
+    log_printf("Sent MSG_P2S_FRAME_INPUTS for frame %u\n", frame);
 }

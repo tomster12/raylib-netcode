@@ -174,7 +174,7 @@ void *game_server_accept_thread(void *arg)
 
             // Find first available slot
             ClientData *client_data = NULL;
-            uint32_t client_index = -1;
+            int client_index = -1;
             for (int i = 0; i < MAX_CLIENTS; ++i)
             {
                 if (!server->client_data[i].is_connected)
@@ -194,12 +194,15 @@ void *game_server_accept_thread(void *arg)
                 continue;
             }
 
-            // Assign to slot and start client thread
+            // Assign to slot and initialise
+            // Frame = -1 means we have received nothing for them
             client_data->is_connected = true;
             client_data->fd = client_fd;
             client_data->index = client_index;
+            client_data->client_frame = -1;
             server->client_count++;
 
+            // Start the thread to listen to the client
             ClientThreadArgs *args = malloc(sizeof(ClientThreadArgs));
             args->server = server;
             args->index = client_index;
@@ -216,7 +219,7 @@ void *game_server_accept_thread(void *arg)
                 continue;
             }
 
-            log_printf("Accepted new client from %s:%d in slot %d (fd=%d, client=%zu)\n",
+            log_printf("Accepted new client from %s:%d in slot %d (fd=%d, client=%d)\n",
                        inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port),
                        client_data->index, client_data->fd, client_data->thread_id);
         }
@@ -231,7 +234,7 @@ void *game_server_client_thread(void *arg)
 {
     ClientThreadArgs *args = (ClientThreadArgs *)arg;
     GameServer *server = args->server;
-    uint32_t client_index = args->index;
+    int client_index = args->index;
     ClientData *client_data = &server->client_data[client_index];
     free(args);
 
@@ -249,7 +252,7 @@ void *game_server_client_thread(void *arg)
         current_events->player_events[client_index] = PLAYER_EVENT_JOIN;
 
         // Serialise initialisation payload
-        msg_size = serialize_init_player(msg_buffer, current_state, current_events, client_index);
+        msg_size = serialize_init_player(msg_buffer, server->server_frame, current_state, current_events, client_index);
     }
     pthread_mutex_unlock(&server->state_lock);
 
@@ -273,15 +276,15 @@ void *game_server_client_thread(void *arg)
         ssize_t message_size = recv(client_data->fd, buffer, sizeof(buffer), 0);
         if (message_size <= 0) break;
 
-        // --------- Handle MSG_P2S_GAME_EVENTS ---------
+        // --------- Handle MSG_P2S_FRAME_INPUTS ---------
 
-        uint32_t frame;
-        uint32_t recv_index;
+        int frame;
+        int recv_index;
         PlayerInput input;
-        deserialize_p2s_game_events(buffer, message_size, &frame, &recv_index, &input);
+        deserialize_p2s_frame_inputs(buffer, message_size, &frame, &recv_index, &input);
         assert(recv_index == client_index);
 
-        log_printf("Received MSG_P2S_GAME_EVENTS for frame %u from player %u\n", frame, client_index);
+        log_printf("Received MSG_P2S_FRAME_INPUTS for frame %u from player %u\n", frame, client_index);
 
         // Lock client and state while we handle storing the clients frame
         pthread_mutex_lock(&server->state_lock);
@@ -306,7 +309,16 @@ void *game_server_client_thread(void *arg)
                     continue;
                 }
 
-                // Write the clients frame data
+                // Expect to receive the clients next frame for now
+                if (frame != (client_data->client_frame + 1) && client_data->client_frame != -1)
+                {
+                    log_printf("Client frame %u unexpected, expected %d\n", frame, client_data->client_frame + 1);
+                    pthread_mutex_unlock(&server->clients_lock);
+                    pthread_mutex_unlock(&server->state_lock);
+                    continue;
+                }
+
+                // Copy clients inputs into local game events
                 GameEvents *events = &server->game_events[frame % FRAME_BUFFER_SIZE];
                 events->player_inputs[client_index] = input;
                 client_data->client_frame = frame;
@@ -378,19 +390,18 @@ void *game_simulation_thread(void *arg)
             GameState *next_state = &server->game_states[(server->server_frame + 1) % FRAME_BUFFER_SIZE];
 
             log_printf("Server simulating frame %u\n", server->server_frame);
-
             game_simulate(current_state, current_events, next_state);
-            server->server_frame++;
 
             // Broadcast out final confirmed events to all clients
             uint8_t buffer[MAX_MESSAGE_SIZE];
-            size_t msg_size = serialize_s2p_game_events(buffer, server->server_frame, current_events);
+            size_t msg_size = serialize_s2p_frame_game_events(buffer, server->server_frame, current_events);
             ssize_t sent = game_server_broadcast(server, buffer, msg_size, -1);
+            log_printf("Broadcasted MSG_S2P_FRAME_GAME_EVENTS for frame %d\n", server->server_frame);
 
-            log_printf("Broadcasted MSG_S2P_GAME_EVENTS for frame %d\n", server->server_frame);
-
-            // Reset events for this frame for when we rollback around
-            memset(&server->game_events[(server->server_frame + 1) % FRAME_BUFFER_SIZE], 0, sizeof(GameEvents));
+            // Now we can iterate to start the next frame
+            server->server_frame++;
+            GameEvents *next_events = &server->game_events[server->server_frame % FRAME_BUFFER_SIZE];
+            memset(next_events, 0, sizeof(GameEvents));
         }
         pthread_mutex_unlock(&server->state_lock);
     }
@@ -409,7 +420,7 @@ ssize_t game_server_broadcast(GameServer *server, const uint8_t *buffer, size_t 
             if (server->client_data[i].is_connected && server->client_data[i].fd != exclude_fd)
             {
                 ssize_t sent = send(server->client_data[i].fd, buffer, size, 0);
-                if (sent < 0) log_printf("Failed to broadcast to client %d: %zu", i, sent);
+                if (sent < 0) log_printf("Failed to broadcast to client %d: %d", i, sent);
                 total_sent += sent;
             }
         }

@@ -2,7 +2,7 @@
 #include "gameimpl.h"
 #include "raylib.h"
 
-void game_handle_events(GameState *game_state, GameEvents *game_events, uint32_t client_index)
+void game_handle_events(GameState *game_state, GameEvents *game_events, int client_index)
 {
     // Otherwise handle moving the player
     PlayerInput *controls = &game_events->player_inputs[client_index];
@@ -12,7 +12,7 @@ void game_handle_events(GameState *game_state, GameEvents *game_events, uint32_t
     controls->movements_held[2] = IsKeyDown(KEY_W);
 }
 
-void game_render(const GameState *game_state, uint32_t client_index)
+void game_render(const GameState *game_state, int client_index)
 {
     // Render each player as a coloured circle
     for (size_t i = 0; i < MAX_CLIENTS; ++i)

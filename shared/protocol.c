@@ -1,21 +1,21 @@
 #include "protocol.h"
 #include <arpa/inet.h>
 #include <assert.h>
-#include <string.h>
 #include <stdio.h>
+#include <string.h>
 
-// MSG_P2S_GAME_EVENTS
+// MSG_P2S_FRAME_INPUTS
 
-size_t serialize_p2s_game_events(uint8_t *buffer, uint32_t frame, uint32_t client_index, const GameEvents *events)
+size_t serialize_p2s_frame_inputs(uint8_t *buffer, int frame, int client_index, const PlayerInput *input)
 {
     MessageHeader header;
-    header.type = MSG_P2S_GAME_EVENTS;
+    header.type = MSG_P2S_FRAME_INPUTS;
     header.frame = htonl(frame);
     header.payload_size = htons(sizeof(P2SGameEventsPayload));
 
     P2SGameEventsPayload payload;
     payload.client_index = htonl(client_index);
-    payload.input = events->player_inputs[client_index];
+    payload.input = *input;
 
     size_t offset = 0;
     memcpy(buffer + offset, &header, sizeof(header));
@@ -27,7 +27,7 @@ size_t serialize_p2s_game_events(uint8_t *buffer, uint32_t frame, uint32_t clien
     return offset;
 }
 
-void deserialize_p2s_game_events(const uint8_t *buffer, size_t message_size, uint32_t *out_frame, uint32_t *out_client_index, PlayerInput *out_input)
+void deserialize_p2s_frame_inputs(const uint8_t *buffer, size_t message_size, int *out_frame, int *out_client_index, PlayerInput *out_input)
 {
     size_t offset = 0;
 
@@ -37,7 +37,7 @@ void deserialize_p2s_game_events(const uint8_t *buffer, size_t message_size, uin
     memcpy(&header, buffer + offset, sizeof(header));
     offset += sizeof(header);
 
-    assert(header.type == MSG_P2S_GAME_EVENTS);
+    assert(header.type == MSG_P2S_FRAME_INPUTS);
 
     uint16_t payload_size = ntohs(header.payload_size);
     assert(payload_size == sizeof(P2SGameEventsPayload));
@@ -51,17 +51,17 @@ void deserialize_p2s_game_events(const uint8_t *buffer, size_t message_size, uin
     *out_input = payload.input;
 }
 
-// MSG_S2P_GAME_EVENTS
+// MSG_S2P_FRAME_GAME_EVENTS
 
-size_t serialize_s2p_game_events(uint8_t *buffer, uint32_t frame, const GameEvents *events)
+size_t serialize_s2p_frame_game_events(uint8_t *buffer, int frame, const GameEvents *events)
 {
     MessageHeader header;
-    header.type = MSG_S2P_GAME_EVENTS;
+    header.type = MSG_S2P_FRAME_GAME_EVENTS;
     header.frame = htonl(frame);
     header.payload_size = htons(sizeof(S2PGameEventsPayload));
 
     S2PGameEventsPayload payload;
-    memcpy(payload.player_inputs, events->player_inputs, sizeof(payload.player_inputs));
+    payload.events = *events;
 
     size_t offset = 0;
     memcpy(buffer + offset, &header, sizeof(header));
@@ -73,7 +73,7 @@ size_t serialize_s2p_game_events(uint8_t *buffer, uint32_t frame, const GameEven
     return offset;
 }
 
-void deserialize_s2p_game_events(const uint8_t *buffer, size_t message_size, uint32_t *out_frame, GameEvents *out_events)
+void deserialize_s2p_frame_game_events(const uint8_t *buffer, size_t message_size, int *out_frame, GameEvents *out_events)
 {
     size_t offset = 0;
 
@@ -83,7 +83,7 @@ void deserialize_s2p_game_events(const uint8_t *buffer, size_t message_size, uin
     memcpy(&header, buffer + offset, sizeof(header));
     offset += sizeof(header);
 
-    assert(header.type == MSG_S2P_GAME_EVENTS);
+    assert(header.type == MSG_S2P_FRAME_GAME_EVENTS);
 
     uint16_t payload_size = ntohs(header.payload_size);
     assert(payload_size == sizeof(S2PGameEventsPayload));
@@ -93,16 +93,16 @@ void deserialize_s2p_game_events(const uint8_t *buffer, size_t message_size, uin
     memcpy(&payload, buffer + offset, sizeof(payload));
 
     *out_frame = ntohl(header.frame);
-    memcpy(out_events->player_inputs, payload.player_inputs, sizeof(payload.player_inputs));
+    *out_events = payload.events;
 }
 
 // MSG_S2P_INIT_PLAYER
 
-size_t serialize_init_player(uint8_t *buffer, const GameState *state, const GameEvents *events, uint32_t client_index)
+size_t serialize_init_player(uint8_t *buffer, int frame, const GameState *state, const GameEvents *events, int client_index)
 {
     MessageHeader header;
     header.type = MSG_S2P_INIT_PLAYER;
-    header.frame = htonl(0);
+    header.frame = htonl(frame);
     header.payload_size = htons(sizeof(InitPlayerPayload));
 
     InitPlayerPayload payload;
@@ -120,7 +120,7 @@ size_t serialize_init_player(uint8_t *buffer, const GameState *state, const Game
     return offset;
 }
 
-void deserialize_init_player(const uint8_t *buffer, size_t message_size, uint32_t *out_frame, GameState *out_state, GameEvents *out_events, uint32_t *out_client_index)
+void deserialize_init_player(const uint8_t *buffer, size_t message_size, int *out_frame, GameState *out_state, GameEvents *out_events, int *out_client_index)
 {
     size_t offset = 0;
 

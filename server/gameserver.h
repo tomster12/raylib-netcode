@@ -10,9 +10,9 @@ typedef struct
 {
     bool is_connected;
     int fd;
-    uint32_t index;
+    int index;
     pthread_t thread_id;
-    uint32_t client_frame;
+    int client_frame;
 } ClientData;
 
 typedef struct
@@ -27,7 +27,7 @@ typedef struct
     pthread_cond_t simulation_loop_cond;
 
     int client_count;
-    uint32_t server_frame;
+    int server_frame;
     ClientData client_data[MAX_CLIENTS];
     GameState game_states[FRAME_BUFFER_SIZE];
     GameEvents game_events[FRAME_BUFFER_SIZE];
@@ -36,7 +36,7 @@ typedef struct
 typedef struct
 {
     GameServer *server;
-    uint32_t index;
+    int index;
 } ClientThreadArgs;
 
 int game_server_init(GameServer *server, int port);

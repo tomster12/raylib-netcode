@@ -6,8 +6,8 @@ void game_simulate(const GameState *current, const GameEvents *events, GameState
 {
     *out = *current;
 
-    uint32_t active_players = 0;
-    for (size_t i = 0; i < MAX_CLIENTS; ++i)
+    int active_players = 0;
+    for (int i = 0; i < MAX_CLIENTS; ++i)
     {
         const PlayerEvent *player_event = &events->player_events[i];
         const PlayerInput *player_input = &events->player_inputs[i];

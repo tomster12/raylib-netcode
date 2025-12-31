@@ -73,9 +73,9 @@ int main()
         pthread_mutex_lock(&client.state_lock);
         {
             // Error state if client is too far ahead of server
-            if (client.client_frame >= client.sync_frame + FRAME_BUFFER_SIZE)
+            if (client.client_frame >= client.sync_frame + FRAME_BUFFER_SIZE - 1)
             {
-                log_printf("WARN: Client frame %u further than buffer size %d from sync frame %u", client.client_frame, FRAME_BUFFER_SIZE, client.sync_frame);
+                log_printf("WARN: Client frame %u reached further than buffer size %d from sync frame %u", client.client_frame, FRAME_BUFFER_SIZE, client.sync_frame);
                 usleep(1000 * 1000);
                 pthread_mutex_unlock(&client.state_lock);
                 continue;
@@ -88,14 +88,16 @@ int main()
 
             log_printf("Client simulating frame %u\n", client.client_frame);
             game_handle_events(current_state, current_events, client.client_index);
-
             game_simulate(current_state, current_events, next_state);
-            client.client_frame++;
 
             // Copy immutable state and events
             next_state_copy = *next_state;
             current_events_copy = *current_events;
-            memset(current_events, 0, sizeof(GameEvents));
+
+            // Now we can iterate to start the next frame
+            client.client_frame++;
+            GameEvents *next_events = &client.events[client.client_frame % FRAME_BUFFER_SIZE];
+            memset(next_events, 0, sizeof(GameEvents));
         }
         pthread_mutex_unlock(&client.state_lock);
 
