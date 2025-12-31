@@ -1,8 +1,8 @@
 #include "gameserver.h"
 #include "../shared/gameimpl.h"
 #include "../shared/globals.h"
-#include "../shared/protocol.h"
 #include "../shared/log.h"
+#include "../shared/protocol.h"
 #include <arpa/inet.h>
 #include <assert.h>
 #include <netinet/in.h>
@@ -79,7 +79,7 @@ int game_server_init(GameServer *server, int port)
         return 1;
     }
 
-    printf("Server listening on localhost:%d (fd=%d, accept=%lu, sim=%lu)\n", port, server->socket_fd, server->client_accept_thread, server->simulation_thread);
+    log_printf("Server listening on localhost:%d (fd=%d, accept=%lu, sim=%lu)\n", port, server->socket_fd, server->client_accept_thread, server->simulation_thread);
     return 0;
 }
 
@@ -90,7 +90,7 @@ void game_server_shutdown(GameServer *server)
     atomic_store(&server->to_shutdown, true);
     if (server->socket_fd > 0)
     {
-        printf("Closing server socket\n");
+        log_printf("Closing server socket\n");
         shutdown(server->socket_fd, SHUT_RDWR);
         close(server->socket_fd);
         server->socket_fd = -1;
@@ -112,12 +112,12 @@ void game_server_shutdown(GameServer *server)
     // Now wait for all the threads to exit correctly
     if (server->simulation_thread)
     {
-        printf("Waiting for simulation loop\n");
+        log_printf("Waiting for simulation loop\n");
         pthread_join(server->simulation_thread, NULL);
     }
     if (server->client_accept_thread)
     {
-        printf("Waiting for client accept loop\n");
+        log_printf("Waiting for client accept loop\n");
         pthread_join(server->client_accept_thread, NULL);
     }
     if (server->client_count > 0)
@@ -126,7 +126,7 @@ void game_server_shutdown(GameServer *server)
         {
             if (server->client_data[i].is_connected)
             {
-                printf("Waiting for client %d\n", i);
+                log_printf("Waiting for client %d\n", i);
                 pthread_join(server->client_data[i].thread_id, NULL);
                 server->client_data[i].fd = -1;
                 server->client_data[i].is_connected = false;
@@ -139,7 +139,7 @@ void game_server_shutdown(GameServer *server)
     pthread_mutex_destroy(&server->state_lock);
     pthread_cond_destroy(&server->simulation_loop_cond);
 
-    printf("Game server shutdown\n");
+    log_printf("Game server shutdown\n");
 }
 
 void *game_server_accept_thread(void *arg)
@@ -157,7 +157,7 @@ void *game_server_accept_thread(void *arg)
 
         if (client_fd < 0)
         {
-            printf("Failed to accept client connection");
+            log_printf("Failed to accept client connection");
             continue;
         }
 
@@ -166,7 +166,7 @@ void *game_server_accept_thread(void *arg)
             // Do not allow more than MAX_CLIENTS clients
             if (server->client_count >= MAX_CLIENTS)
             {
-                printf("Maximum client limit reached (%d), rejecting connection (fd=%d)\n", MAX_CLIENTS, client_fd);
+                log_printf("Maximum client limit reached (%d), rejecting connection (fd=%d)\n", MAX_CLIENTS, client_fd);
                 close(client_fd);
                 pthread_mutex_unlock(&server->clients_lock);
                 continue;
@@ -189,7 +189,7 @@ void *game_server_accept_thread(void *arg)
             // If no slot was available then reject the client
             if (client_data == NULL)
             {
-                printf("No available client slots, rejecting connection (fd=%d)\n", client_fd);
+                log_printf("No available client slots, rejecting connection (fd=%d)\n", client_fd);
                 close(client_fd);
                 continue;
             }
@@ -216,14 +216,14 @@ void *game_server_accept_thread(void *arg)
                 continue;
             }
 
-            printf("Accepted new client from %s:%d in slot %d (fd=%d, client=%zu)\n",
-                   inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port),
-                   client_data->index, client_data->fd, client_data->thread_id);
+            log_printf("Accepted new client from %s:%d in slot %d (fd=%d, client=%zu)\n",
+                       inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port),
+                       client_data->index, client_data->fd, client_data->thread_id);
         }
         pthread_mutex_unlock(&server->clients_lock);
     }
 
-    printf("Client accept thread shutdown\n");
+    log_printf("Client accept thread shutdown\n");
     return NULL;
 }
 
@@ -257,12 +257,11 @@ void *game_server_client_thread(void *arg)
     ssize_t sent = send(client_data->fd, msg_buffer, msg_size, 0);
     if (sent < 0)
     {
-        printf("Failed to send MSG_S2P_INIT_PLAYER to client %d\n", client_index);
+        log_printf("Failed to send MSG_S2P_INIT_PLAYER to client %d\n", client_index);
         goto cleanup;
     }
 
-    log_timestamp();
-    printf("Sent MSG_S2P_INIT_PLAYER to client %u\n", client_index);
+    log_printf("Sent MSG_S2P_INIT_PLAYER to client %u\n", client_index);
 
     // ------------------ Listening ------------------
 
@@ -282,8 +281,7 @@ void *game_server_client_thread(void *arg)
         deserialize_p2s_game_events(buffer, message_size, &frame, &recv_index, &input);
         assert(recv_index == client_index);
 
-        log_timestamp();
-        printf("Received MSG_P2S_GAME_EVENTS for frame %u from player %u\n", frame, client_index);
+        log_printf("Received MSG_P2S_GAME_EVENTS for frame %u from player %u\n", frame, client_index);
 
         // Lock client and state while we handle storing the clients frame
         pthread_mutex_lock(&server->state_lock);
@@ -293,7 +291,7 @@ void *game_server_client_thread(void *arg)
                 // Error if client is behind the server
                 if (frame < server->server_frame)
                 {
-                    printf("WARN: Client frame %u is behind the server frame %u, IGNORING DATA", frame, server->server_frame);
+                    log_printf("WARN: Client frame %u is behind the server frame %u, IGNORING DATA", frame, server->server_frame);
                     pthread_mutex_unlock(&server->clients_lock);
                     pthread_mutex_unlock(&server->state_lock);
                     continue;
@@ -302,7 +300,7 @@ void *game_server_client_thread(void *arg)
                 // Error if client is too far ahead of server
                 if (frame >= server->server_frame + FRAME_BUFFER_SIZE)
                 {
-                    printf("WARN: Client frame %u further than buffer size %d from server frame %u, IGNORING DATA", frame, FRAME_BUFFER_SIZE, server->server_frame);
+                    log_printf("WARN: Client frame %u further than buffer size %d from server frame %u, IGNORING DATA", frame, FRAME_BUFFER_SIZE, server->server_frame);
                     pthread_mutex_unlock(&server->clients_lock);
                     pthread_mutex_unlock(&server->state_lock);
                     continue;
@@ -325,8 +323,8 @@ void *game_server_client_thread(void *arg)
     }
 
 cleanup:
-    printf("Client disconnecting (thread=%lu fd=%d player=%u)\n",
-           client_data->thread_id, client_data->fd, client_index);
+    log_printf("Client disconnecting (thread=%lu fd=%d player=%u)\n",
+               client_data->thread_id, client_data->fd, client_index);
 
     // Close client socket
     if (client_data->fd >= 0)
@@ -351,7 +349,7 @@ cleanup:
     }
     pthread_mutex_unlock(&server->clients_lock);
 
-    printf("Client thread finished for player %u\n", client_index);
+    log_printf("Client thread finished for player %u\n", client_index);
     return NULL;
 }
 
@@ -379,8 +377,7 @@ void *game_simulation_thread(void *arg)
             GameEvents *current_events = &server->game_events[server->server_frame % FRAME_BUFFER_SIZE];
             GameState *next_state = &server->game_states[(server->server_frame + 1) % FRAME_BUFFER_SIZE];
 
-            log_timestamp();
-            printf("Server simulating frame %u\n", server->server_frame);
+            log_printf("Server simulating frame %u\n", server->server_frame);
 
             game_simulate(current_state, current_events, next_state);
             server->server_frame++;
@@ -390,8 +387,7 @@ void *game_simulation_thread(void *arg)
             size_t msg_size = serialize_s2p_game_events(buffer, server->server_frame, current_events);
             ssize_t sent = game_server_broadcast(server, buffer, msg_size, -1);
 
-            log_timestamp();
-            printf("Broadcasted MSG_S2P_GAME_EVENTS for frame %d\n", server->server_frame);
+            log_printf("Broadcasted MSG_S2P_GAME_EVENTS for frame %d\n", server->server_frame);
 
             // Reset events for this frame for when we rollback around
             memset(&server->game_events[(server->server_frame + 1) % FRAME_BUFFER_SIZE], 0, sizeof(GameEvents));
@@ -399,7 +395,7 @@ void *game_simulation_thread(void *arg)
         pthread_mutex_unlock(&server->state_lock);
     }
 
-    printf("Server simulation thread shutdown\n");
+    log_printf("Server simulation thread shutdown\n");
     return NULL;
 }
 
@@ -413,7 +409,7 @@ ssize_t game_server_broadcast(GameServer *server, const uint8_t *buffer, size_t 
             if (server->client_data[i].is_connected && server->client_data[i].fd != exclude_fd)
             {
                 ssize_t sent = send(server->client_data[i].fd, buffer, size, 0);
-                if (sent < 0) printf("Failed to broadcast to client %d: %zu", i, sent);
+                if (sent < 0) log_printf("Failed to broadcast to client %d: %zu", i, sent);
                 total_sent += sent;
             }
         }

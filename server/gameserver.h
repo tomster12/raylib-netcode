@@ -1,6 +1,6 @@
 #pragma once
 
-#include "shared/gameimpl.h"
+#include "../shared/gameimpl.h"
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>

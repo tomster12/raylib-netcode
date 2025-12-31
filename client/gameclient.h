@@ -1,7 +1,7 @@
 #pragma once
 
-#include "shared/gameimpl.h"
-#include "shared/protocol.h"
+#include "../shared/gameimpl.h"
+#include "../shared/protocol.h"
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>

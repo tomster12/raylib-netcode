@@ -2,8 +2,9 @@
 // cbuild: gameserver.c ../shared/gameimpl.c ../shared/protocol.c ../shared/log.c
 
 #include "gameserver.h"
-#include "shared/gameimpl.h"
-#include "shared/globals.h"
+#include "../shared/gameimpl.h"
+#include "../shared/globals.h"
+#include "../shared/log.h"
 #include <errno.h>
 #include <pthread.h>
 #include <signal.h>
@@ -17,7 +18,7 @@ volatile sig_atomic_t to_shutdown_app = 0;
 
 void handle_sigaction(int signum)
 {
-    printf("Received sigaction signum=%d\n", signum);
+    log_printf("Received sigaction signum=%d\n", signum);
     to_shutdown_app = 1;
 }
 
@@ -34,7 +35,7 @@ void init_sigaction_handler(struct sigaction *sa)
 
 int main()
 {
-    printf("Server application started\n");
+    log_printf("Server application started\n");
 
     struct sigaction sa;
     init_sigaction_handler(&sa);
@@ -48,7 +49,7 @@ int main()
 
     while (!to_shutdown_app) pause();
 
-    printf("\nShutting down the game server\n");
+    log_printf("Shutting down the game server\n");
     game_server_shutdown(&server);
     return 0;
 }

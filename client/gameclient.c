@@ -58,7 +58,7 @@ int game_client_init(GameClient *client, const char *server_ip, int port)
         return 1;
     }
 
-    printf("Game client connected to %s:%d (fd=%d, listen=%lu)\n\n", server_ip, port, client->socket_fd, client->recv_thread);
+    log_printf("Game client connected to %s:%d (fd=%d, listen=%lu)\n\n", server_ip, port, client->socket_fd, client->recv_thread);
     atomic_store(&client->is_connected, true);
     return 0;
 }
@@ -72,7 +72,7 @@ void game_client_shutdown(GameClient *client)
     // Close the connection socket
     if (client->socket_fd >= 0)
     {
-        printf("Closing client socket\n");
+        log_printf("Closing client socket\n");
         shutdown(client->socket_fd, SHUT_RDWR);
         close(client->socket_fd);
     }
@@ -80,11 +80,11 @@ void game_client_shutdown(GameClient *client)
     // Wait for the listening thread
     if (client->recv_thread)
     {
-        printf("Waiting for receive thread\n");
+        log_printf("Waiting for receive thread\n");
         pthread_join(client->recv_thread, NULL);
     }
 
-    printf("Game client shutdown\n");
+    log_printf("Game client shutdown\n");
 }
 
 void *game_client_recv_thread(void *arg)
@@ -113,7 +113,7 @@ void *game_client_recv_thread(void *arg)
     }
 
     atomic_store(&client->is_connected, false);
-    printf("Client recv_thread shutdown\n");
+    log_printf("Client recv_thread shutdown\n");
     return NULL;
 }
 
@@ -129,8 +129,7 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
         GameEvents current_events;
         deserialize_init_player((uint8_t *)buffer, message_size, &frame, &current_state, &current_events, &client_index);
         
-        log_timestamp();
-        printf("Received MSG_S2P_INIT_PLAYER as player %u\n", client_index);
+        log_printf("Received MSG_S2P_INIT_PLAYER as player %u\n", client_index);
 
         // Initialize player with the given frame, events, state
         pthread_mutex_lock(&client->state_lock);
@@ -154,14 +153,13 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
         GameEvents server_frame_events;
         deserialize_s2p_game_events((uint8_t *)buffer, message_size, &frame, &server_frame_events);
         
-        log_timestamp();
-        printf("Received MSG_S2P_GAME_EVENTS for frame %u\n", frame);
+        log_printf("Received MSG_S2P_GAME_EVENTS for frame %u\n", frame);
 
         pthread_mutex_lock(&client->state_lock);
         {
             if (frame != client->server_frame + 1)
             {
-                printf("Server frame %u unexpected, expected %d\n", frame, client->server_frame + 1);
+                log_printf("Server frame %u unexpected, expected %d\n", frame, client->server_frame + 1);
                 pthread_mutex_unlock(&client->state_lock);
                 break;
             }
@@ -177,7 +175,7 @@ void game_client_handle_payload(GameClient *client, MessageHeader *header, char 
     }
 
     default:
-        printf("Unknown message type: %d\n", header->type);
+        log_printf("Unknown message type: %d\n", header->type);
         break;
     }
 }
@@ -201,11 +199,10 @@ void game_client_send_game_events(GameClient *client, uint32_t frame, GameEvents
     ssize_t sent = send(client->socket_fd, buffer, msg_size, 0);
     if (sent < 0)
     {
-        printf("Client failed to send frame %u", frame);
+        log_printf("Client failed to send frame %u", frame);
         atomic_store(&client->is_connected, false);
         return;
     }
 
-    log_timestamp();
-    printf("Sent MSG_P2S_GAME_EVENTS for frame %u\n", frame);
+    log_printf("Sent MSG_P2S_GAME_EVENTS for frame %u\n", frame);
 }

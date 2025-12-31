@@ -1,4 +1,4 @@
-#include "shared/gameimpl.h"
+#include "../shared/gameimpl.h"
 #include "gameimpl.h"
 #include "raylib.h"
 

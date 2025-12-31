@@ -1,4 +1,5 @@
 #include "gameimpl.h"
+#include "log.h"
 #include <assert.h>
 
 void game_simulate(const GameState *current, const GameEvents *events, GameState *out)
@@ -18,6 +19,7 @@ void game_simulate(const GameState *current, const GameEvents *events, GameState
             player_data->active = true;
             player_data->x = 400.0f;
             player_data->y = 400.0f;
+            log_printf("Spawning player %d\n", i);
         }
         if (*player_event == PLAYER_EVENT_LEAVE)
         {

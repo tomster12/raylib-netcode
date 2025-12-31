@@ -1,6 +1,6 @@
 #pragma once
 
-#include "shared/gameimpl.h"
+#include "../shared/gameimpl.h"
 
 void game_handle_events(GameState *game_state, GameEvents *game_events, uint32_t client_index);
 

@@ -1,12 +1,12 @@
 // cbuild: -I../libs/raylib/include -L../libs/raylib/lib -I../
 // cbuild: -lraylib -lm ../shared/gameimpl.c ../shared/protocol.c ../shared/log.c gameimpl.c gameclient.c
 
-#include "gameclient.h"
-#include "gameimpl.h"
-#include "raylib.h"
 #include "../shared/gameimpl.h"
 #include "../shared/globals.h"
 #include "../shared/log.h"
+#include "gameclient.h"
+#include "gameimpl.h"
+#include "raylib.h"
 #include <arpa/inet.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -36,7 +36,7 @@ void init_sigaction_handler(struct sigaction *sa)
 
 int main()
 {
-    printf("Client application started\n");
+    log_printf("Client application started\n");
 
     struct sigaction sa;
     init_sigaction_handler(&sa);
@@ -55,6 +55,16 @@ int main()
 
     while (!WindowShouldClose() && !to_shutdown_app && atomic_load(&client.is_connected))
     {
+        // int key = GetKeyPressed();
+        // if (key == 0)
+        // {
+        //     BeginDrawing();
+        //     ClearBackground(RAYWHITE);
+        //     EndDrawing();
+        //     continue;
+        // }
+        // log_printf("Key: %d\n", key);
+
         if (!atomic_load_explicit(&client.is_initialised, memory_order_acquire)) continue;
 
         // Do the main simulation in a tight lock to allow receiving data
@@ -65,7 +75,7 @@ int main()
             // Error state if client is too far ahead of server
             if (client.client_frame >= client.sync_frame + FRAME_BUFFER_SIZE)
             {
-                printf("WARN: Client frame %u further than buffer size %d from sync frame %u", client.client_frame, FRAME_BUFFER_SIZE, client.sync_frame);
+                log_printf("WARN: Client frame %u further than buffer size %d from sync frame %u", client.client_frame, FRAME_BUFFER_SIZE, client.sync_frame);
                 usleep(1000 * 1000);
                 pthread_mutex_unlock(&client.state_lock);
                 continue;
@@ -76,9 +86,7 @@ int main()
             GameEvents *current_events = &client.events[client.client_frame % FRAME_BUFFER_SIZE];
             GameState *next_state = &client.states[(client.client_frame + 1) % FRAME_BUFFER_SIZE];
 
-            log_timestamp();
-            printf("Client simulating frame %u\n", client.client_frame);
-            memset(current_events, 0, sizeof(GameEvents));
+            log_printf("Client simulating frame %u\n", client.client_frame);
             game_handle_events(current_state, current_events, client.client_index);
 
             game_simulate(current_state, current_events, next_state);
@@ -87,6 +95,7 @@ int main()
             // Copy immutable state and events
             next_state_copy = *next_state;
             current_events_copy = *current_events;
+            memset(current_events, 0, sizeof(GameEvents));
         }
         pthread_mutex_unlock(&client.state_lock);
 
@@ -101,7 +110,7 @@ int main()
         EndDrawing();
     }
 
-    printf("\nShutting down the game client\n");
+    log_printf("Shutting down the game client\n");
     game_client_shutdown(&client);
     CloseWindow();
     return 0;

@@ -1,5 +1,3 @@
 #pragma once
 
-#include <stdint.h>
-
-void log_timestamp(void);
+void log_printf(const char *fmt, ...);

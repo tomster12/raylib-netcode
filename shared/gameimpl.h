@@ -1,6 +1,6 @@
 #pragma once
 
-#include "shared/globals.h"
+#include "../shared/globals.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
